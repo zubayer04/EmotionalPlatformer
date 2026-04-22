@@ -431,7 +431,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ChunkBlueprintRuntimeBuilder
   cellSize: {x: 1, y: 1}
   buildOnStart: 0
-  markerVerticalOffset: 0
+  markerVerticalOffset: -1
   solidSprite: {fileID: 4145954614454109286, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
   spikeSprite: {fileID: -1982991433, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
   blueprintToBuild:
@@ -966,7 +966,7 @@ Camera:
   far clip plane: 1000
   field of view: 60
   orthographic: 1
-  orthographic size: 5.6998553
+  orthographic size: 5.625
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
