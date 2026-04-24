@@ -55,7 +55,7 @@ MonoBehaviour:
   exitDelta: {x: 10, y: 0}
   widthSourceTilemap: {fileID: 0}
   difficultyRating: 8
-  hasHazard: 0
+  hasHazard: 1
   estimatedJumps: 1
   tags: 0200000001000000
 --- !u!1 &1066844494568397734

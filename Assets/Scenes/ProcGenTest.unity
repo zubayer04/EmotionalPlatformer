@@ -368,7 +368,7 @@ MonoBehaviour:
   blueprintRuntimeBuilder: {fileID: 672173401}
   generatedChunkReplacementChance: 0.25
   allowGeneratedGap: 1
-  allowGeneratedPrecision: 1
+  allowGeneratedPrecision: 0
   allowGeneratedVertical: 0
   allowGeneratedSpikes: 0
   allowGeneratedSafeRest: 0
