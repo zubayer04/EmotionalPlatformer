@@ -131,7 +131,7 @@ MonoBehaviour:
   widthSourceTilemap: {fileID: 0}
   difficultyRating: 2
   hasHazard: 0
-  estimatedJumps: 0
+  estimatedJumps: 2
   tags: 03000000
 --- !u!1 &3565948505843176914
 GameObject:
