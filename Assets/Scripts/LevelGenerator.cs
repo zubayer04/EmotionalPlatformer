@@ -772,6 +772,9 @@ public class LevelGenerator : MonoBehaviour
             if (!IsHardConstraintAllowed(prev2, prev1, cd.primaryTag))
                 continue;
 
+            if (IsBlockedVerticalOppositePair(previousPrefabName, prefab.name))
+                continue;
+
             if (enforceExactRepeatRule && avoidSamePrefabBackToBack && prefab.name == previousPrefabName)
                 continue;
 
@@ -796,6 +799,30 @@ public class LevelGenerator : MonoBehaviour
             return false;
 
         return true;
+    }
+
+    private bool IsBlockedVerticalOppositePair(string previousPrefabName, string candidatePrefabName)
+    {
+        string previous = NormalizePrefabName(previousPrefabName);
+        string candidate = NormalizePrefabName(candidatePrefabName);
+
+        bool upThenDown =
+            previous == "Chunk_VerticalUp_Tilemap" &&
+            candidate == "Chunk_VerticalDown_Tilemap";
+
+        bool downThenUp =
+            previous == "Chunk_VerticalDown_Tilemap" &&
+            candidate == "Chunk_VerticalUp_Tilemap";
+
+        return upThenDown || downThenUp;
+    }
+
+    private string NormalizePrefabName(string prefabName)
+    {
+        if (string.IsNullOrEmpty(prefabName))
+            return string.Empty;
+
+        return prefabName.Trim();
     }
 
     private enum DifficultyBand { Low, Medium, High }
