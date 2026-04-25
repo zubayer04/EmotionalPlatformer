@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -8,6 +9,8 @@ using UnityEngine.SceneManagement;
 public class ChunkCalibrationReporterWindow : EditorWindow
 {
     private const int SampleSeed = 12345;
+    private const int SequenceSampleRuns = 10;
+    private const int SequenceSampleBaseSeed = SampleSeed + 1000;
 
     private Vector2 scroll;
     private string report = "Click Generate Report to build a read-only calibration audit.";
@@ -61,6 +64,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             AppendGeneratedSamples(sb, ChunkTag.Gap, "Generated Gap Samples", warnings);
             AppendGeneratedSamples(sb, ChunkTag.Precision, "Generated Precision Samples", warnings, IsReplacementAllowedBySettings(generator, ChunkTag.Precision));
             AppendReplacementEquivalence(sb, generator, chunks, warnings);
+            AppendSequenceSampling(sb, generator, chunks, warnings);
             AppendWarnings(sb, warnings);
 
             return sb.ToString();
@@ -326,6 +330,444 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         sb.AppendLine();
         sb.AppendLine($"Replacement Review Count: {replacementReviewCount}");
         sb.AppendLine();
+    }
+
+    private static void AppendSequenceSampling(
+        StringBuilder sb,
+        LevelGenerator generator,
+        List<ChunkRecord> chunks,
+        List<string> warnings)
+    {
+        sb.AppendLine("## Sequence Sampling");
+
+        if (generator == null)
+        {
+            sb.AppendLine("No active scene LevelGenerator found.");
+            sb.AppendLine();
+            warnings.Add("Sequence sampling skipped because no active scene LevelGenerator was found.");
+            return;
+        }
+
+        MethodInfo buildFreshSequence = typeof(LevelGenerator).GetMethod("BuildFreshSequence", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (buildFreshSequence == null)
+        {
+            sb.AppendLine("BuildFreshSequence() could not be reflected.");
+            sb.AppendLine();
+            warnings.Add("Sequence sampling skipped because BuildFreshSequence() could not be reflected.");
+            return;
+        }
+
+        bool hasFixedStartingChunk = generator.startingChunkPrefab != null;
+        int expectedGeneratedSlots = Mathf.Max(0, generator.totalChunks - (hasFixedStartingChunk ? 1 : 0));
+        List<SequenceSlotSample> slotSamples = new List<SequenceSlotSample>(SequenceSampleRuns * Mathf.Max(1, expectedGeneratedSlots));
+        Dictionary<string, int> chunkUsage = new Dictionary<string, int>(StringComparer.Ordinal);
+        Dictionary<string, int> tagUsage = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        for (int runIndex = 0; runIndex < SequenceSampleRuns; runIndex++)
+        {
+            int seed = SequenceSampleBaseSeed + runIndex;
+            UnityEngine.Random.InitState(seed);
+
+            List<GameObject> sequence = null;
+            try
+            {
+                sequence = buildFreshSequence.Invoke(generator, null) as List<GameObject>;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Sequence sampling run {runIndex + 1} could not invoke BuildFreshSequence(): {ex.GetBaseException().Message}.");
+            }
+
+            if (sequence == null)
+            {
+                warnings.Add($"Sequence sampling run {runIndex + 1} returned a null sequence.");
+                continue;
+            }
+
+            int startOffset = 0;
+            if (hasFixedStartingChunk && sequence.Count > 0 && sequence[0] == generator.startingChunkPrefab)
+            {
+                startOffset = 1;
+            }
+            else if (hasFixedStartingChunk)
+            {
+                warnings.Add($"Sequence sampling run {runIndex + 1} did not begin with the configured starting chunk; review sequence assumptions.");
+            }
+
+            int generatedSlots = Mathf.Max(0, sequence.Count - startOffset);
+            if (generatedSlots < expectedGeneratedSlots)
+                warnings.Add($"Sequence sampling run {runIndex + 1} returned {generatedSlots} generated slots instead of the expected {expectedGeneratedSlots}; review pool sufficiency or hard constraints.");
+
+            for (int i = startOffset; i < sequence.Count; i++)
+            {
+                int generatedSlotIndex = i - startOffset;
+                GameObject prefab = sequence[i];
+                ChunkData data = prefab != null ? prefab.GetComponent<ChunkData>() : null;
+                float slotTargetDifficulty = GetSlotTargetDifficulty(generator, generatedSlotIndex);
+                int selectedDifficulty = data != null ? data.difficultyRating : -1;
+                string selectedChunkName = prefab != null ? prefab.name : "<null>";
+                string selectedPrimaryTag = data != null ? data.primaryTag.ToString() : "Unknown";
+                float delta = data != null ? data.difficultyRating - slotTargetDifficulty : 0f;
+
+                slotSamples.Add(new SequenceSlotSample
+                {
+                    runIndex = runIndex + 1,
+                    seed = seed,
+                    slotIndex = generatedSlotIndex + 1,
+                    slotTargetDifficulty = slotTargetDifficulty,
+                    selectedChunkName = selectedChunkName,
+                    selectedPrimaryTag = selectedPrimaryTag,
+                    selectedDifficulty = selectedDifficulty,
+                    deltaFromSlotTarget = delta
+                });
+
+                if (prefab == null)
+                    continue;
+
+                IncrementCount(chunkUsage, selectedChunkName);
+                IncrementCount(tagUsage, selectedPrimaryTag);
+            }
+        }
+
+        AppendSequenceSamplingConfig(sb, generator, expectedGeneratedSlots);
+        AppendSequenceRunDetails(sb, slotSamples);
+        AppendSequenceSlotSummary(sb, slotSamples);
+        AppendSequenceProgressionSummary(sb, slotSamples, warnings);
+        AppendSequenceUsageSummary(sb, slotSamples, chunkUsage, tagUsage, chunks);
+        AppendPoolSufficiencySnapshot(sb, slotSamples, chunkUsage, chunks, generator, warnings);
+    }
+
+    private static void AppendSequenceSamplingConfig(StringBuilder sb, LevelGenerator generator, int expectedGeneratedSlots)
+    {
+        sb.AppendLine("### Sequence Sampling Config");
+        sb.AppendLine($"sampleRuns: {SequenceSampleRuns}");
+        sb.AppendLine($"baseSeed: {SequenceSampleBaseSeed}");
+        sb.AppendLine($"totalChunks: {generator.totalChunks}");
+        sb.AppendLine($"expectedGeneratedSlotsPerRun: {expectedGeneratedSlots}");
+        sb.AppendLine($"startingChunkPrefab: {AssetPath(generator.startingChunkPrefab)}");
+        sb.AppendLine("slotTargetComparisonExcludesFixedStartingChunk: true");
+        sb.AppendLine("sequenceSamplingReflectsHandcraftedSelectionOnly: true");
+        sb.AppendLine();
+    }
+
+    private static void AppendSequenceRunDetails(StringBuilder sb, List<SequenceSlotSample> slotSamples)
+    {
+        sb.AppendLine("### Per-Run Slot Detail");
+        sb.AppendLine("Run | Seed | SlotIndex | SlotTargetDifficulty | SelectedChunk | SelectedPrimaryTag | SelectedDifficulty | DeltaFromSlotTarget");
+        sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | ---");
+
+        if (slotSamples.Count == 0)
+        {
+            sb.AppendLine("No sequence slot samples were collected.");
+            sb.AppendLine();
+            return;
+        }
+
+        for (int i = 0; i < slotSamples.Count; i++)
+        {
+            SequenceSlotSample sample = slotSamples[i];
+            sb.AppendLine(
+                $"{sample.runIndex} | {sample.seed} | {sample.slotIndex} | {sample.slotTargetDifficulty:0.##} | {sample.selectedChunkName} | " +
+                $"{sample.selectedPrimaryTag} | {sample.selectedDifficulty} | {sample.deltaFromSlotTarget:+0.##;-0.##;0}");
+        }
+
+        sb.AppendLine();
+    }
+
+    private static void AppendSequenceSlotSummary(StringBuilder sb, List<SequenceSlotSample> slotSamples)
+    {
+        sb.AppendLine("### Per-Slot Summary");
+        sb.AppendLine("SlotIndex | AvgSlotTarget | AvgSelectedDifficulty | AvgDelta | AvgAbsDelta | UniqueChunks | MostCommonChunk");
+        sb.AppendLine("--- | --- | --- | --- | --- | --- | ---");
+
+        Dictionary<int, SequenceSlotAggregate> aggregates = BuildSlotAggregates(slotSamples);
+        if (aggregates.Count == 0)
+        {
+            sb.AppendLine("No per-slot summary is available.");
+            sb.AppendLine();
+            return;
+        }
+
+        List<int> slotIndices = new List<int>(aggregates.Keys);
+        slotIndices.Sort();
+
+        for (int i = 0; i < slotIndices.Count; i++)
+        {
+            int slotIndex = slotIndices[i];
+            SequenceSlotAggregate aggregate = aggregates[slotIndex];
+            string mostCommonChunk = GetMostCommonKey(aggregate.chunkCounts);
+            float count = Mathf.Max(1, aggregate.count);
+
+            sb.AppendLine(
+                $"{slotIndex} | {aggregate.sumTarget / count:0.##} | {aggregate.sumSelectedDifficulty / count:0.##} | " +
+                $"{aggregate.sumDelta / count:+0.##;-0.##;0} | {aggregate.sumAbsDelta / count:0.##} | " +
+                $"{aggregate.chunkCounts.Count} | {mostCommonChunk}");
+        }
+
+        sb.AppendLine();
+    }
+
+    private static void AppendSequenceProgressionSummary(StringBuilder sb, List<SequenceSlotSample> slotSamples, List<string> warnings)
+    {
+        sb.AppendLine("### Progression Summary");
+
+        if (slotSamples.Count == 0)
+        {
+            sb.AppendLine("No progression summary is available.");
+            sb.AppendLine();
+            return;
+        }
+
+        int maxSlotIndex = GetMaxSlotIndex(slotSamples);
+        float firstSum = 0f;
+        float middleSum = 0f;
+        float lastSum = 0f;
+        int firstCount = 0;
+        int middleCount = 0;
+        int lastCount = 0;
+        float totalAbsDelta = 0f;
+
+        Dictionary<int, SequenceRunAggregate> runAggregates = new Dictionary<int, SequenceRunAggregate>();
+
+        for (int i = 0; i < slotSamples.Count; i++)
+        {
+            SequenceSlotSample sample = slotSamples[i];
+            SequenceRegion region = GetSequenceRegion(sample.slotIndex, maxSlotIndex);
+
+            switch (region)
+            {
+                case SequenceRegion.First:
+                    firstSum += sample.selectedDifficulty;
+                    firstCount++;
+                    break;
+                case SequenceRegion.Middle:
+                    middleSum += sample.selectedDifficulty;
+                    middleCount++;
+                    break;
+                case SequenceRegion.Last:
+                    lastSum += sample.selectedDifficulty;
+                    lastCount++;
+                    break;
+            }
+
+            totalAbsDelta += Mathf.Abs(sample.deltaFromSlotTarget);
+
+            if (!runAggregates.TryGetValue(sample.runIndex, out SequenceRunAggregate runAggregate))
+            {
+                runAggregate = new SequenceRunAggregate();
+                runAggregates.Add(sample.runIndex, runAggregate);
+            }
+
+            if (region == SequenceRegion.First)
+            {
+                runAggregate.firstSelectedSum += sample.selectedDifficulty;
+                runAggregate.firstCount++;
+            }
+            else if (region == SequenceRegion.Last)
+            {
+                runAggregate.lastSelectedSum += sample.selectedDifficulty;
+                runAggregate.lastCount++;
+            }
+        }
+
+        float firstAvg = firstCount > 0 ? firstSum / firstCount : 0f;
+        float middleAvg = middleCount > 0 ? middleSum / middleCount : 0f;
+        float lastAvg = lastCount > 0 ? lastSum / lastCount : 0f;
+        float overallAvgAbsDelta = totalAbsDelta / Mathf.Max(1, slotSamples.Count);
+
+        int runsWhereLastHarder = 0;
+        foreach (KeyValuePair<int, SequenceRunAggregate> pair in runAggregates)
+        {
+            SequenceRunAggregate aggregate = pair.Value;
+            if (aggregate.firstCount == 0 || aggregate.lastCount == 0)
+                continue;
+
+            float runFirstAvg = aggregate.firstSelectedSum / aggregate.firstCount;
+            float runLastAvg = aggregate.lastSelectedSum / aggregate.lastCount;
+            if (runLastAvg > runFirstAvg)
+                runsWhereLastHarder++;
+        }
+
+        sb.AppendLine($"firstThirdAvgSelectedDifficulty: {firstAvg:0.##}");
+        sb.AppendLine($"middleThirdAvgSelectedDifficulty: {middleAvg:0.##}");
+        sb.AppendLine($"lastThirdAvgSelectedDifficulty: {lastAvg:0.##}");
+        sb.AppendLine($"lastMinusFirst: {lastAvg - firstAvg:+0.##;-0.##;0}");
+        sb.AppendLine($"runsWhereLastThirdHarderThanFirstThird: {runsWhereLastHarder}/{SequenceSampleRuns}");
+        sb.AppendLine($"overallAvgAbsDeltaFromSlotTarget: {overallAvgAbsDelta:0.##}");
+
+        List<string> notes = new List<string>();
+        if (lastAvg <= firstAvg)
+            notes.Add("later slots are not clearly harder on average; review progression settings");
+        if (overallAvgAbsDelta > 1f)
+            notes.Add("selected chunk difficulty is drifting from slot target; review sequencing pressure");
+
+        if (notes.Count == 0)
+        {
+            sb.AppendLine("reviewNotes: current sampled progression looks broadly aligned with the slot ramp.");
+        }
+        else
+        {
+            sb.AppendLine($"reviewNotes: {string.Join("; ", notes)}");
+            for (int i = 0; i < notes.Count; i++)
+                warnings.Add($"Sequence sampling: {notes[i]}.");
+        }
+
+        sb.AppendLine();
+    }
+
+    private static void AppendSequenceUsageSummary(
+        StringBuilder sb,
+        List<SequenceSlotSample> slotSamples,
+        Dictionary<string, int> chunkUsage,
+        Dictionary<string, int> tagUsage,
+        List<ChunkRecord> chunks)
+    {
+        sb.AppendLine("### Usage Summary");
+
+        int totalSelections = slotSamples.Count;
+        List<KeyValuePair<string, int>> chunkEntries = SortCountsDescending(chunkUsage);
+        List<KeyValuePair<string, int>> tagEntries = SortCountsDescending(tagUsage);
+        int configuredSelectableChunks = CountConfiguredSelectableChunks(chunks);
+
+        sb.AppendLine("#### By Chunk");
+        sb.AppendLine("Chunk | SelectionCount | SelectionPercent");
+        sb.AppendLine("--- | --- | ---");
+        if (chunkEntries.Count == 0)
+        {
+            sb.AppendLine("No chunk usage samples collected.");
+        }
+        else
+        {
+            for (int i = 0; i < chunkEntries.Count; i++)
+            {
+                KeyValuePair<string, int> entry = chunkEntries[i];
+                float percent = totalSelections > 0 ? (entry.Value * 100f) / totalSelections : 0f;
+                sb.AppendLine($"{entry.Key} | {entry.Value} | {percent:0.##}%");
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("#### By Primary Tag");
+        sb.AppendLine("PrimaryTag | SelectionCount | SelectionPercent");
+        sb.AppendLine("--- | --- | ---");
+        if (tagEntries.Count == 0)
+        {
+            sb.AppendLine("No primary-tag usage samples collected.");
+        }
+        else
+        {
+            for (int i = 0; i < tagEntries.Count; i++)
+            {
+                KeyValuePair<string, int> entry = tagEntries[i];
+                float percent = totalSelections > 0 ? (entry.Value * 100f) / totalSelections : 0f;
+                sb.AppendLine($"{entry.Key} | {entry.Value} | {percent:0.##}%");
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"uniqueConfiguredChunks: {configuredSelectableChunks}");
+        sb.AppendLine($"uniqueSelectedChunks: {chunkUsage.Count}");
+        sb.AppendLine($"neverSelectedConfiguredChunks: {GetNeverSelectedChunks(chunks, chunkUsage).Count}");
+        sb.AppendLine();
+    }
+
+    private static void AppendPoolSufficiencySnapshot(
+        StringBuilder sb,
+        List<SequenceSlotSample> slotSamples,
+        Dictionary<string, int> chunkUsage,
+        List<ChunkRecord> chunks,
+        LevelGenerator generator,
+        List<string> warnings)
+    {
+        sb.AppendLine("### Pool Sufficiency Snapshot");
+
+        List<ChunkRecord> configuredSelectableChunks = GetConfiguredSelectableChunks(chunks);
+        Dictionary<string, int> configuredByTag = new Dictionary<string, int>(StringComparer.Ordinal);
+        Dictionary<int, int> configuredByDifficulty = new Dictionary<int, int>();
+
+        for (int i = 0; i < configuredSelectableChunks.Count; i++)
+        {
+            ChunkRecord chunk = configuredSelectableChunks[i];
+            IncrementCount(configuredByTag, chunk.primaryTag.ToString());
+            IncrementCount(configuredByDifficulty, chunk.difficultyRating);
+        }
+
+        sb.AppendLine("configuredChunkCountByPrimaryTag:");
+        AppendIndentedCounts(sb, SortCountsDescending(configuredByTag));
+        sb.AppendLine("configuredChunkCountByDifficulty:");
+        AppendIndentedCounts(sb, SortIntegerCountsAscending(configuredByDifficulty));
+
+        List<string> neverSelected = GetNeverSelectedChunks(chunks, chunkUsage);
+        float totalSelections = Mathf.Max(1, slotSamples.Count);
+        List<KeyValuePair<string, int>> chunkEntries = SortCountsDescending(chunkUsage);
+        float top3Share = 0f;
+        for (int i = 0; i < chunkEntries.Count && i < 3; i++)
+            top3Share += chunkEntries[i].Value;
+        top3Share = (top3Share * 100f) / totalSelections;
+
+        List<string> familyNotes = new List<string>();
+        Dictionary<string, int> configuredFamilyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        Dictionary<string, HashSet<string>> observedFamilies = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        for (int i = 0; i < configuredSelectableChunks.Count; i++)
+        {
+            string family = configuredSelectableChunks[i].primaryTag.ToString();
+            IncrementCount(configuredFamilyCounts, family);
+            if (!observedFamilies.ContainsKey(family))
+                observedFamilies.Add(family, new HashSet<string>(StringComparer.Ordinal));
+        }
+
+        foreach (KeyValuePair<string, int> pair in chunkUsage)
+        {
+            ChunkRecord configuredChunk = FindChunkByName(configuredSelectableChunks, pair.Key);
+            if (string.IsNullOrEmpty(configuredChunk.name))
+                continue;
+
+            string family = configuredChunk.primaryTag.ToString();
+            if (!observedFamilies.TryGetValue(family, out HashSet<string> observed))
+            {
+                observed = new HashSet<string>(StringComparer.Ordinal);
+                observedFamilies.Add(family, observed);
+            }
+
+            observed.Add(pair.Key);
+        }
+
+        foreach (KeyValuePair<string, int> pair in configuredFamilyCounts)
+        {
+            int observedCount = observedFamilies.TryGetValue(pair.Key, out HashSet<string> observed) ? observed.Count : 0;
+            if (pair.Value > 1 && observedCount <= 1)
+                familyNotes.Add($"{pair.Key} has {pair.Value} configured chunks but only {observedCount} observed in samples");
+        }
+
+        int targetAdjacentCount = 0;
+        for (int i = 0; i < configuredSelectableChunks.Count; i++)
+        {
+            if (Mathf.Abs(configuredSelectableChunks[i].difficultyRating - generator.targetDifficulty) <= 1f)
+                targetAdjacentCount++;
+        }
+
+        List<string> reviewNotes = new List<string>();
+        if (top3Share > 50f)
+            reviewNotes.Add("selection appears concentrated in a small subset of chunks");
+        if (neverSelected.Count > 0)
+            reviewNotes.Add($"{neverSelected.Count} configured chunks were never selected across the current sample set");
+        if (targetAdjacentCount < 3)
+            reviewNotes.Add("the handcrafted pool near the current target difficulty looks thin");
+        reviewNotes.AddRange(familyNotes);
+
+        sb.AppendLine($"top3ChunkSelectionShare: {top3Share:0.##}%");
+        sb.AppendLine($"targetAdjacentConfiguredChunks(+/-1 difficulty): {targetAdjacentCount}");
+        sb.AppendLine($"neverSelectedConfiguredChunks: {(neverSelected.Count > 0 ? string.Join(", ", neverSelected) : "None")}");
+        sb.AppendLine($"familiesWithLimitedObservedVariety: {(familyNotes.Count > 0 ? string.Join("; ", familyNotes) : "None")}");
+        sb.AppendLine($"reviewNotes: {(reviewNotes.Count > 0 ? string.Join("; ", reviewNotes) : "current handcrafted pool looks broadly sufficient for the sampled settings")}");
+        sb.AppendLine();
+
+        for (int i = 0; i < familyNotes.Count; i++)
+            warnings.Add($"Sequence sampling: {familyNotes[i]}.");
+
+        if (top3Share > 50f)
+            warnings.Add("Sequence sampling: selection appears concentrated in a small subset of chunks.");
     }
 
     private static void AppendWarnings(StringBuilder sb, List<string> warnings)
@@ -639,6 +1081,185 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         return string.Join(" / ", rows);
     }
 
+    private static float GetSlotTargetDifficulty(LevelGenerator generator, int generatedSlotIndex)
+    {
+        float progress = Mathf.Clamp01((generatedSlotIndex + 1f) / Mathf.Max(1, generator.totalChunks - 1));
+        return Mathf.Lerp(generator.startDifficultyBias, generator.targetDifficulty, progress);
+    }
+
+    private static Dictionary<int, SequenceSlotAggregate> BuildSlotAggregates(List<SequenceSlotSample> slotSamples)
+    {
+        Dictionary<int, SequenceSlotAggregate> aggregates = new Dictionary<int, SequenceSlotAggregate>();
+
+        for (int i = 0; i < slotSamples.Count; i++)
+        {
+            SequenceSlotSample sample = slotSamples[i];
+            if (!aggregates.TryGetValue(sample.slotIndex, out SequenceSlotAggregate aggregate))
+            {
+                aggregate = new SequenceSlotAggregate();
+                aggregates.Add(sample.slotIndex, aggregate);
+            }
+
+            aggregate.count++;
+            aggregate.sumTarget += sample.slotTargetDifficulty;
+            aggregate.sumSelectedDifficulty += sample.selectedDifficulty;
+            aggregate.sumDelta += sample.deltaFromSlotTarget;
+            aggregate.sumAbsDelta += Mathf.Abs(sample.deltaFromSlotTarget);
+            IncrementCount(aggregate.chunkCounts, sample.selectedChunkName);
+        }
+
+        return aggregates;
+    }
+
+    private static int GetMaxSlotIndex(List<SequenceSlotSample> slotSamples)
+    {
+        int maxSlotIndex = 0;
+        for (int i = 0; i < slotSamples.Count; i++)
+            maxSlotIndex = Mathf.Max(maxSlotIndex, slotSamples[i].slotIndex);
+
+        return maxSlotIndex;
+    }
+
+    private static SequenceRegion GetSequenceRegion(int slotIndex, int maxSlotIndex)
+    {
+        if (maxSlotIndex <= 1)
+            return SequenceRegion.First;
+
+        float progress = (slotIndex - 1f) / Mathf.Max(1f, maxSlotIndex);
+        if (progress < 1f / 3f)
+            return SequenceRegion.First;
+        if (progress < 2f / 3f)
+            return SequenceRegion.Middle;
+        return SequenceRegion.Last;
+    }
+
+    private static List<KeyValuePair<string, int>> SortCountsDescending(Dictionary<string, int> counts)
+    {
+        List<KeyValuePair<string, int>> entries = new List<KeyValuePair<string, int>>(counts);
+        entries.Sort((a, b) =>
+        {
+            int countCompare = b.Value.CompareTo(a.Value);
+            return countCompare != 0 ? countCompare : string.Compare(a.Key, b.Key, StringComparison.Ordinal);
+        });
+        return entries;
+    }
+
+    private static List<KeyValuePair<int, int>> SortIntegerCountsAscending(Dictionary<int, int> counts)
+    {
+        List<KeyValuePair<int, int>> entries = new List<KeyValuePair<int, int>>(counts);
+        entries.Sort((a, b) => a.Key.CompareTo(b.Key));
+        return entries;
+    }
+
+    private static void AppendIndentedCounts(StringBuilder sb, List<KeyValuePair<string, int>> entries)
+    {
+        if (entries.Count == 0)
+        {
+            sb.AppendLine("  - None");
+            return;
+        }
+
+        for (int i = 0; i < entries.Count; i++)
+            sb.AppendLine($"  - {entries[i].Key}: {entries[i].Value}");
+    }
+
+    private static void AppendIndentedCounts(StringBuilder sb, List<KeyValuePair<int, int>> entries)
+    {
+        if (entries.Count == 0)
+        {
+            sb.AppendLine("  - None");
+            return;
+        }
+
+        for (int i = 0; i < entries.Count; i++)
+            sb.AppendLine($"  - {entries[i].Key}: {entries[i].Value}");
+    }
+
+    private static string GetMostCommonKey(Dictionary<string, int> counts)
+    {
+        string bestKey = "-";
+        int bestCount = -1;
+
+        foreach (KeyValuePair<string, int> pair in counts)
+        {
+            if (pair.Value > bestCount || (pair.Value == bestCount && string.Compare(pair.Key, bestKey, StringComparison.Ordinal) < 0))
+            {
+                bestKey = pair.Key;
+                bestCount = pair.Value;
+            }
+        }
+
+        return bestKey;
+    }
+
+    private static void IncrementCount(Dictionary<string, int> counts, string key)
+    {
+        if (counts.TryGetValue(key, out int current))
+            counts[key] = current + 1;
+        else
+            counts.Add(key, 1);
+    }
+
+    private static void IncrementCount(Dictionary<int, int> counts, int key)
+    {
+        if (counts.TryGetValue(key, out int current))
+            counts[key] = current + 1;
+        else
+            counts.Add(key, 1);
+    }
+
+    private static int CountConfiguredSelectableChunks(List<ChunkRecord> chunks)
+    {
+        int count = 0;
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            if (chunks[i].role != "Starting")
+                count++;
+        }
+
+        return count;
+    }
+
+    private static List<ChunkRecord> GetConfiguredSelectableChunks(List<ChunkRecord> chunks)
+    {
+        List<ChunkRecord> configured = new List<ChunkRecord>();
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            if (chunks[i].role != "Starting")
+                configured.Add(chunks[i]);
+        }
+
+        return configured;
+    }
+
+    private static List<string> GetNeverSelectedChunks(List<ChunkRecord> chunks, Dictionary<string, int> chunkUsage)
+    {
+        List<string> neverSelected = new List<string>();
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            ChunkRecord chunk = chunks[i];
+            if (chunk.role == "Starting")
+                continue;
+
+            if (!chunkUsage.ContainsKey(chunk.name))
+                neverSelected.Add(chunk.name);
+        }
+
+        neverSelected.Sort(StringComparer.Ordinal);
+        return neverSelected;
+    }
+
+    private static ChunkRecord FindChunkByName(List<ChunkRecord> chunks, string name)
+    {
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            if (chunks[i].name == name)
+                return chunks[i];
+        }
+
+        return default;
+    }
+
     private struct ChunkRecord
     {
         public string role;
@@ -659,5 +1280,42 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         public int gapCount;
         public int maxGapWidth;
         public int minLandingWidth;
+    }
+
+    private struct SequenceSlotSample
+    {
+        public int runIndex;
+        public int seed;
+        public int slotIndex;
+        public float slotTargetDifficulty;
+        public string selectedChunkName;
+        public string selectedPrimaryTag;
+        public int selectedDifficulty;
+        public float deltaFromSlotTarget;
+    }
+
+    private class SequenceSlotAggregate
+    {
+        public int count;
+        public float sumTarget;
+        public float sumSelectedDifficulty;
+        public float sumDelta;
+        public float sumAbsDelta;
+        public Dictionary<string, int> chunkCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+    }
+
+    private class SequenceRunAggregate
+    {
+        public float firstSelectedSum;
+        public int firstCount;
+        public float lastSelectedSum;
+        public int lastCount;
+    }
+
+    private enum SequenceRegion
+    {
+        First,
+        Middle,
+        Last
     }
 }

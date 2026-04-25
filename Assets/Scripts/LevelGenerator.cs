@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -95,6 +96,13 @@ public class LevelGenerator : MonoBehaviour
 
     // Track exact prefab sequence for replay
     private readonly List<GameObject> lastGeneratedSequence = new List<GameObject>();
+    private readonly Dictionary<ChunkData, LevelRunLog.SlotRecord> activeSlotRecordsByChunk =
+        new Dictionary<ChunkData, LevelRunLog.SlotRecord>();
+
+    private LevelRunLog.RunRecord currentRunLog;
+    private int currentRunSeed;
+    private int lastGeneratedRunSeed;
+    private int generatedRunCounter;
 
     // Useful for other scripts (LevelManager etc.)
     public Vector3 FirstEntryWorld { get; private set; }
@@ -111,23 +119,53 @@ public class LevelGenerator : MonoBehaviour
     public int TotalEstimatedJumps { get; private set; }
     public int VerticalChunkCount { get; private set; }
     public int ChunkCountThisLevel { get; private set; }
+    public LevelRunLog.RunRecord CurrentRunLog => currentRunLog;
+    public int CurrentRunSeed => currentRunSeed;
+    public int LastGeneratedRunSeed => lastGeneratedRunSeed;
 
     public void GenerateLevel()
     {
-        List<GameObject> generatedSequence = BuildFreshSequence();
-        GenerateLevelFromSequence(generatedSequence, rememberAsReplaySequence: true);
+        GenerateLevelWithSeed(CreateNextRunSeed(), null, rememberAsReplaySequence: true, isReplay: false, replaySourceSeed: 0);
     }
 
     public void ReplayLastGeneratedLevel()
     {
-        if (lastGeneratedSequence.Count == 0)
+        if (generatedRunCounter == 0 && lastGeneratedSequence.Count == 0)
         {
             Debug.LogWarning("LevelGenerator: No stored level sequence to replay. Generating a fresh level instead.");
             GenerateLevel();
             return;
         }
 
-        GenerateLevelFromSequence(lastGeneratedSequence, rememberAsReplaySequence: false);
+        GenerateLevelWithSeed(
+            lastGeneratedRunSeed,
+            null,
+            rememberAsReplaySequence: false,
+            isReplay: true,
+            replaySourceSeed: lastGeneratedRunSeed);
+    }
+
+    public void RecordDeathForChunk(ChunkData chunk, string source, float timeOfDeathSeconds)
+    {
+        if (currentRunLog == null)
+            return;
+
+        LevelRunLog.DeathEventRecord deathEvent = new LevelRunLog.DeathEventRecord
+        {
+            source = source,
+            chunkName = chunk != null ? LevelRunLog.CleanName(chunk.name) : "None",
+            primaryTag = chunk != null ? chunk.primaryTag.ToString() : "None",
+            timeOfDeathSeconds = timeOfDeathSeconds,
+            slotIndex = -1
+        };
+
+        if (chunk != null && activeSlotRecordsByChunk.TryGetValue(chunk, out LevelRunLog.SlotRecord slotRecord))
+        {
+            slotRecord.deathsAttributedToSlot++;
+            deathEvent.slotIndex = slotRecord.sequenceIndex;
+        }
+
+        currentRunLog.deathEvents.Add(deathEvent);
     }
 
     public ChunkData GetBestChunkForWorldPosition(Vector3 worldPos)
@@ -190,6 +228,68 @@ public class LevelGenerator : MonoBehaviour
         }
 
         return containingChunk != null ? containingChunk : closestChunk;
+    }
+
+    private void GenerateLevelWithSeed(
+        int runSeed,
+        List<GameObject> sourceSequence,
+        bool rememberAsReplaySequence,
+        bool isReplay,
+        int replaySourceSeed)
+    {
+        UnityEngine.Random.State previousRandomState = UnityEngine.Random.state;
+
+        try
+        {
+            currentRunLog = null;
+            currentRunSeed = runSeed;
+            UnityEngine.Random.InitState(runSeed);
+
+            List<GameObject> sequence = sourceSequence != null
+                ? new List<GameObject>(sourceSequence)
+                : BuildFreshSequence();
+
+            if (sequence == null || sequence.Count == 0)
+            {
+                Debug.LogWarning("LevelGenerator: No sequence was available for generation.");
+                return;
+            }
+
+            currentRunLog = CreateRunRecord(runSeed, isReplay, replaySourceSeed);
+            GenerateLevelFromSequence(sequence, rememberAsReplaySequence);
+
+            if (rememberAsReplaySequence)
+                lastGeneratedRunSeed = runSeed;
+        }
+        finally
+        {
+            UnityEngine.Random.state = previousRandomState;
+        }
+    }
+
+    private int CreateNextRunSeed()
+    {
+        generatedRunCounter++;
+        return unchecked((int)(DateTime.UtcNow.Ticks ^ (generatedRunCounter * 397L)));
+    }
+
+    private LevelRunLog.RunRecord CreateRunRecord(int runSeed, bool isReplay, int replaySourceSeed)
+    {
+        return new LevelRunLog.RunRecord
+        {
+            runId = $"{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}_{Mathf.Abs(runSeed)}",
+            generatedAtUtc = DateTime.UtcNow.ToString("o"),
+            runSeed = runSeed,
+            isReplay = isReplay,
+            replaySourceSeed = replaySourceSeed,
+            targetDifficultyBeforeRun = targetDifficulty,
+            startDifficultyBias = startDifficultyBias,
+            difficultyPreferenceStrength = difficultyPreferenceStrength,
+            useTwoStepMarkov = useTwoStepMarkov,
+            useGeneratedBlueprintChunks = useGeneratedBlueprintChunks,
+            generatedChunkReplacementChance = generatedChunkReplacementChance,
+            totalChunksConfigured = totalChunks
+        };
     }
 
     private List<GameObject> BuildFreshSequence()
@@ -276,6 +376,9 @@ public class LevelGenerator : MonoBehaviour
         }
 
         Vector3 nextAttachPoint = (startPoint != null) ? startPoint.position : transform.position;
+        bool hasFixedStartingChunk = startingChunkPrefab != null &&
+                                     sequence.Count > 0 &&
+                                     sequence[0] == startingChunkPrefab;
 
         FirstEntryWorld = nextAttachPoint;
         LastExitWorld = nextAttachPoint;
@@ -285,15 +388,30 @@ public class LevelGenerator : MonoBehaviour
             GameObject prefab = sequence[i];
             if (prefab == null) continue;
 
-            GameObject chunk = SpawnChunkFromPrefabOrBlueprint(prefab, i);
+            bool isStartingChunk = hasFixedStartingChunk && i == 0;
+            int generatedSlotIndex = isStartingChunk ? -1 : (hasFixedStartingChunk ? i - 1 : i);
+            LevelRunLog.SlotRecord slotRecord = CreateSelectedSlotRecord(prefab, i, generatedSlotIndex, isStartingChunk);
+
+            SpawnedChunkResult spawnResult = SpawnChunkResultFromPrefabOrBlueprint(prefab, i);
+            slotRecord.spawnSucceeded = spawnResult.chunk != null;
+            slotRecord.replacementAttempted = spawnResult.replacementAttempted;
+            slotRecord.replacementSucceeded = spawnResult.replacementSucceeded;
+            slotRecord.replacementMode = spawnResult.replacementMode;
+            slotRecord.generatedBlueprintName = spawnResult.generatedBlueprintName;
+
+            GameObject chunk = spawnResult.chunk;
             if (chunk == null)
             {
+                if (currentRunLog != null) currentRunLog.slots.Add(slotRecord);
                 Debug.LogWarning($"LevelGenerator: Failed to spawn chunk for prefab '{prefab.name}'.");
                 continue;
             }
 
+            PopulateSpawnedSlotRecord(slotRecord, chunk);
+            if (currentRunLog != null) currentRunLog.slots.Add(slotRecord);
+
             spawnedObjects.Add(chunk);
-            CacheChunkDataIfPresent(chunk);
+            CacheChunkDataIfPresent(chunk, slotRecord);
 
             if (!SnapChunkEntryToPoint(chunk, nextAttachPoint))
             {
@@ -319,26 +437,49 @@ public class LevelGenerator : MonoBehaviour
         RecalculateDifficultyStats();
     }
 
-    private GameObject SpawnChunkFromPrefabOrBlueprint(GameObject prefab, int slotIndex)
+    private SpawnedChunkResult SpawnChunkResultFromPrefabOrBlueprint(GameObject prefab, int slotIndex)
     {
-        if (prefab == null) return null;
+        if (prefab == null) return default;
 
         ChunkData cd = prefab.GetComponent<ChunkData>();
+        bool replacementAttempted = ShouldUseGeneratedChunk(cd, slotIndex);
 
-        if (!ShouldUseGeneratedChunk(cd, slotIndex))
+        if (!replacementAttempted)
         {
-            return Instantiate(prefab, Vector3.zero, Quaternion.identity);
+            return new SpawnedChunkResult
+            {
+                chunk = Instantiate(prefab, Vector3.zero, Quaternion.identity),
+                replacementAttempted = false,
+                replacementSucceeded = false,
+                replacementMode = "none",
+                generatedBlueprintName = string.Empty
+            };
         }
 
-        GameObject generatedChunk = TryBuildGeneratedChunkFromPrefab(prefab, cd);
+        string generatedBlueprintName;
+        GameObject generatedChunk = TryBuildGeneratedChunkFromPrefab(prefab, cd, out generatedBlueprintName);
 
         if (generatedChunk != null)
         {
-            return generatedChunk;
+            return new SpawnedChunkResult
+            {
+                chunk = generatedChunk,
+                replacementAttempted = true,
+                replacementSucceeded = true,
+                replacementMode = "generated_success",
+                generatedBlueprintName = generatedBlueprintName
+            };
         }
 
         Debug.LogWarning($"LevelGenerator: Falling back to handcrafted prefab for '{prefab.name}'.");
-        return Instantiate(prefab, Vector3.zero, Quaternion.identity);
+        return new SpawnedChunkResult
+        {
+            chunk = Instantiate(prefab, Vector3.zero, Quaternion.identity),
+            replacementAttempted = true,
+            replacementSucceeded = false,
+            replacementMode = "generated_fallback",
+            generatedBlueprintName = generatedBlueprintName
+        };
     }
 
     private bool ShouldUseGeneratedChunk(ChunkData cd, int slotIndex)
@@ -350,7 +491,7 @@ public class LevelGenerator : MonoBehaviour
         // Keep the very first chunk stable/safe
         if (slotIndex == 0) return false;
 
-        if (Random.value > generatedChunkReplacementChance) return false;
+        if (UnityEngine.Random.value > generatedChunkReplacementChance) return false;
 
         switch (cd.primaryTag)
         {
@@ -375,8 +516,10 @@ public class LevelGenerator : MonoBehaviour
         }
     }
 
-    private GameObject TryBuildGeneratedChunkFromPrefab(GameObject prefab, ChunkData cd)
+    private GameObject TryBuildGeneratedChunkFromPrefab(GameObject prefab, ChunkData cd, out string generatedBlueprintName)
     {
+        generatedBlueprintName = string.Empty;
+
         if (cd == null) return null;
 
         ChunkGenerationRequest request = new ChunkGenerationRequest
@@ -394,6 +537,8 @@ public class LevelGenerator : MonoBehaviour
             Debug.LogWarning($"LevelGenerator: Generator returned null for '{prefab.name}'.");
             return null;
         }
+
+        generatedBlueprintName = blueprint.chunkName;
 
         ChunkBlueprintValidationResult validation = ChunkBlueprintValidator.Validate(blueprint);
         if (!validation.isValid)
@@ -414,6 +559,67 @@ public class LevelGenerator : MonoBehaviour
         }
 
         return built;
+    }
+
+    private LevelRunLog.SlotRecord CreateSelectedSlotRecord(GameObject prefab, int sequenceIndex, int generatedSlotIndex, bool isStartingChunk)
+    {
+        LevelRunLog.SlotRecord record = new LevelRunLog.SlotRecord
+        {
+            sequenceIndex = sequenceIndex,
+            generatedSlotIndex = generatedSlotIndex,
+            isStartingChunk = isStartingChunk,
+            replacementMode = "none"
+        };
+
+        if (!isStartingChunk && generatedSlotIndex >= 0)
+        {
+            record.hasSlotTargetDifficulty = true;
+            record.slotTargetDifficulty = GetSlotTargetDifficultyForGeneratedSlotIndex(generatedSlotIndex);
+        }
+
+        if (prefab == null)
+        {
+            record.selectedPrefabName = "MissingPrefab";
+            return record;
+        }
+
+        record.selectedPrefabName = LevelRunLog.CleanName(prefab.name);
+
+        ChunkData selectedData = prefab.GetComponent<ChunkData>();
+        if (selectedData == null)
+            return record;
+
+        record.selectedPrimaryTag = selectedData.primaryTag.ToString();
+        record.selectedDifficulty = selectedData.difficultyRating;
+        record.selectedHasHazard = selectedData.hasHazard;
+        record.selectedEstimatedJumps = selectedData.estimatedJumps;
+        record.selectedExitDelta = selectedData.exitDelta;
+
+        return record;
+    }
+
+    private void PopulateSpawnedSlotRecord(LevelRunLog.SlotRecord slotRecord, GameObject chunk)
+    {
+        if (slotRecord == null || chunk == null)
+            return;
+
+        slotRecord.spawnedChunkName = LevelRunLog.CleanName(chunk.name);
+
+        ChunkData spawnedData = chunk.GetComponent<ChunkData>();
+        if (spawnedData == null)
+            return;
+
+        slotRecord.spawnedPrimaryTag = spawnedData.primaryTag.ToString();
+        slotRecord.spawnedDifficulty = spawnedData.difficultyRating;
+        slotRecord.spawnedHasHazard = spawnedData.hasHazard;
+        slotRecord.spawnedEstimatedJumps = spawnedData.estimatedJumps;
+        slotRecord.spawnedExitDelta = spawnedData.exitDelta;
+    }
+
+    private float GetSlotTargetDifficultyForGeneratedSlotIndex(int generatedSlotIndex)
+    {
+        float progress = Mathf.Clamp01((generatedSlotIndex + 1f) / Mathf.Max(1, totalChunks - 1));
+        return Mathf.Lerp(startDifficultyBias, targetDifficulty, progress);
     }
 
     private int GetPreferredWidthForTag(ChunkData cd)
@@ -532,7 +738,7 @@ public class LevelGenerator : MonoBehaviour
             totalWeight += finalWeight;
         }
 
-        float roll = Random.value * totalWeight;
+        float roll = UnityEngine.Random.value * totalWeight;
         float running = 0f;
 
         for (int i = 0; i < candidates.Count; i++)
@@ -665,6 +871,7 @@ public class LevelGenerator : MonoBehaviour
                 if (next == ChunkTag.Rest) return 2.0f;
                 if (next == ChunkTag.Gap) return 1.75f;
                 if (next == ChunkTag.Vertical) return 1.25f;
+                if (next == ChunkTag.Spikes) return 1.0f;
                 return 0.25f;
             }
 
@@ -775,6 +982,7 @@ public class LevelGenerator : MonoBehaviour
 
         spawnedObjects.Clear();
         spawnedChunkData.Clear();
+        activeSlotRecordsByChunk.Clear();
 
         LevelWorldBounds = new Bounds(Vector3.zero, Vector3.zero);
         LowestSolidY = 0f;
@@ -823,12 +1031,17 @@ public class LevelGenerator : MonoBehaviour
         return null;
     }
 
-    private void CacheChunkDataIfPresent(GameObject chunkInstance)
+    private void CacheChunkDataIfPresent(GameObject chunkInstance, LevelRunLog.SlotRecord slotRecord)
     {
         if (chunkInstance == null) return;
 
         ChunkData cd = chunkInstance.GetComponent<ChunkData>();
-        if (cd != null) spawnedChunkData.Add(cd);
+        if (cd == null) return;
+
+        spawnedChunkData.Add(cd);
+
+        if (slotRecord != null)
+            activeSlotRecordsByChunk[cd] = slotRecord;
     }
 
     private void RecalculateLevelBounds()
@@ -923,5 +1136,14 @@ public class LevelGenerator : MonoBehaviour
         }
 
         return false;
+    }
+
+    private struct SpawnedChunkResult
+    {
+        public GameObject chunk;
+        public bool replacementAttempted;
+        public bool replacementSucceeded;
+        public string replacementMode;
+        public string generatedBlueprintName;
     }
 }

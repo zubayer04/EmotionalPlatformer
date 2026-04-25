@@ -191,6 +191,11 @@ public class LevelManager : MonoBehaviour
             timeOfDeath = levelTimer
         });
 
+        if (levelGenerator != null)
+        {
+            levelGenerator.RecordDeathForChunk(chunk, source, levelTimer);
+        }
+
         Debug.Log(
             chunk != null
                 ? $"PLAYER DIED | source={source} | chunk={CleanChunkName(chunk.name)} | tag={chunk.primaryTag} | diff={chunk.difficultyRating} | levelTime={levelTimer:F2}s"
@@ -224,16 +229,20 @@ public class LevelManager : MonoBehaviour
             lastDeathsPerChunk = deathsPerChunk;
             lastTimePerChunk = timePerChunk;
             lastTargetBeforeAdapt = levelGenerator.targetDifficulty;
+            LevelRunLog.AdaptationRecord adaptationRecord;
 
             if (adaptiveDifficultyEnabled)
             {
-                UpdateTargetDifficulty(deathsPerChunk, timePerChunk);
+                adaptationRecord = UpdateTargetDifficulty(deathsPerChunk, timePerChunk);
             }
             else
             {
                 lastTargetAfterAdapt = levelGenerator.targetDifficulty;
                 lastAdaptationDecision = "Adaptive OFF";
+                adaptationRecord = CreateAdaptiveOffRecord(deathsPerChunk, timePerChunk);
             }
+
+            FinalizeAndWriteCurrentRunLog(deathsPerChunk, timePerChunk, adaptationRecord);
 
             Debug.Log(
                 $"LEVEL COMPLETE | time={completedTime:F2}s | deaths={completedDeaths} | " +
@@ -295,9 +304,11 @@ public class LevelManager : MonoBehaviour
         RespawnPlayer(resetVelocity: true);
     }
 
-    private void UpdateTargetDifficulty(float deathsPerChunk, float timePerChunk)
+    private LevelRunLog.AdaptationRecord UpdateTargetDifficulty(float deathsPerChunk, float timePerChunk)
     {
-        float newTarget = levelGenerator.targetDifficulty;
+        float targetBefore = levelGenerator.targetDifficulty;
+        float newTarget = targetBefore;
+        int cleanRunStreakBefore = cleanRunStreak;
 
         bool tooHard =
             deathsPerChunk > hardDeathsPerChunkThreshold ||
@@ -312,11 +323,16 @@ public class LevelManager : MonoBehaviour
             timePerChunk < fastTimePerChunkThreshold &&
             levelGenerator.LevelDifficultyScore < levelGenerator.targetDifficulty;
 
+        bool tooEasyByStreak = false;
+        string decisionCode;
+        string decisionText;
+
         if (tooHard)
         {
             cleanRunStreak = 0;
             newTarget -= targetDifficultyStep;
-            lastAdaptationDecision = "Too hard -> decrease target";
+            decisionCode = "decrease_too_hard";
+            decisionText = "Too hard -> decrease target";
         }
         else
         {
@@ -325,29 +341,123 @@ public class LevelManager : MonoBehaviour
             else
                 cleanRunStreak = 0;
 
-            bool tooEasyByStreak = cleanRunStreak >= cleanRunStreakThreshold;
+            tooEasyByStreak = cleanRunStreak >= cleanRunStreakThreshold;
 
             if (tooEasySingleRun)
             {
                 newTarget += targetDifficultyStep;
                 cleanRunStreak = 0;
-                lastAdaptationDecision = "Too easy -> increase target";
+                decisionCode = "increase_too_easy";
+                decisionText = "Too easy -> increase target";
             }
             else if (tooEasyByStreak)
             {
                 newTarget += targetDifficultyStep;
                 cleanRunStreak = 0;
-                lastAdaptationDecision = $"Clean run streak ({cleanRunStreakThreshold}) -> increase target";
+                decisionCode = "increase_clean_streak";
+                decisionText = $"Clean run streak ({cleanRunStreakThreshold}) -> increase target";
             }
             else
             {
-                lastAdaptationDecision = "About right -> keep target";
+                decisionCode = "keep_about_right";
+                decisionText = "About right -> keep target";
             }
         }
 
         newTarget = Mathf.Clamp(newTarget, minTargetDifficulty, maxTargetDifficulty);
         levelGenerator.targetDifficulty = newTarget;
         lastTargetAfterAdapt = newTarget;
+        lastAdaptationDecision = decisionText;
+
+        return new LevelRunLog.AdaptationRecord
+        {
+            adaptiveEnabled = true,
+            targetBefore = targetBefore,
+            targetAfter = newTarget,
+            decisionCode = decisionCode,
+            decisionText = decisionText,
+            deathsPerChunk = deathsPerChunk,
+            timePerChunk = timePerChunk,
+            actualDifficulty = levelGenerator.LevelDifficultyScore,
+            cleanRun = cleanRun,
+            tooHard = tooHard,
+            tooEasySingleRun = tooEasySingleRun,
+            tooEasyByStreak = tooEasyByStreak,
+            cleanRunStreakBefore = cleanRunStreakBefore,
+            cleanRunStreakAfter = cleanRunStreak,
+            hardDeathsPerChunkThreshold = hardDeathsPerChunkThreshold,
+            slowTimePerChunkThreshold = slowTimePerChunkThreshold,
+            easyDeathsPerChunkThreshold = easyDeathsPerChunkThreshold,
+            fastTimePerChunkThreshold = fastTimePerChunkThreshold,
+            targetDifficultyStep = targetDifficultyStep,
+            cleanRunStreakThreshold = cleanRunStreakThreshold
+        };
+    }
+
+    private LevelRunLog.AdaptationRecord CreateAdaptiveOffRecord(float deathsPerChunk, float timePerChunk)
+    {
+        return new LevelRunLog.AdaptationRecord
+        {
+            adaptiveEnabled = false,
+            targetBefore = lastTargetBeforeAdapt,
+            targetAfter = levelGenerator.targetDifficulty,
+            decisionCode = "adaptive_off",
+            decisionText = "Adaptive OFF",
+            deathsPerChunk = deathsPerChunk,
+            timePerChunk = timePerChunk,
+            actualDifficulty = levelGenerator.LevelDifficultyScore,
+            cleanRun = deathsThisLevel == 0 && timePerChunk < fastTimePerChunkThreshold,
+            tooHard = false,
+            tooEasySingleRun = false,
+            tooEasyByStreak = false,
+            cleanRunStreakBefore = cleanRunStreak,
+            cleanRunStreakAfter = cleanRunStreak,
+            hardDeathsPerChunkThreshold = hardDeathsPerChunkThreshold,
+            slowTimePerChunkThreshold = slowTimePerChunkThreshold,
+            easyDeathsPerChunkThreshold = easyDeathsPerChunkThreshold,
+            fastTimePerChunkThreshold = fastTimePerChunkThreshold,
+            targetDifficultyStep = targetDifficultyStep,
+            cleanRunStreakThreshold = cleanRunStreakThreshold
+        };
+    }
+
+    private void FinalizeAndWriteCurrentRunLog(
+        float deathsPerChunk,
+        float timePerChunk,
+        LevelRunLog.AdaptationRecord adaptationRecord)
+    {
+        LevelRunLog.RunRecord runRecord = levelGenerator != null ? levelGenerator.CurrentRunLog : null;
+        if (runRecord == null)
+        {
+            Debug.LogWarning("LEVEL RUN LOGGING FAILED | No active run record was available at completion.");
+            return;
+        }
+
+        runRecord.chunkCountThisLevel = levelGenerator.ChunkCountThisLevel;
+        runRecord.levelTimeSeconds = completedTime;
+        runRecord.deathsThisLevel = completedDeaths;
+        runRecord.deathsPerChunk = deathsPerChunk;
+        runRecord.timePerChunk = timePerChunk;
+        runRecord.actualLevelDifficultyScore = completedActualDifficulty;
+        runRecord.avgChunkDifficulty = completedAvgDifficulty;
+        runRecord.hazardChunkCount = completedHazards;
+        runRecord.totalEstimatedJumps = completedJumps;
+        runRecord.verticalChunkCount = completedVertical;
+        runRecord.adaptation = adaptationRecord ?? new LevelRunLog.AdaptationRecord();
+
+        if (LevelRunLog.TryAppendRun(runRecord, out string outputPath))
+        {
+            Debug.Log(
+                $"LEVEL RUN LOGGED | path={outputPath} | runId={runRecord.runId} | seed={runRecord.runSeed} | " +
+                $"slots={runRecord.slots.Count} | deaths={runRecord.deathsThisLevel}"
+            );
+        }
+        else
+        {
+            Debug.LogWarning(
+                $"LEVEL RUN LOGGING FAILED | runId={runRecord.runId} | seed={runRecord.runSeed} | error={outputPath}"
+            );
+        }
     }
 
     private void ResetStats()

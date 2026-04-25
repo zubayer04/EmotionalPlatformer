@@ -1,0 +1,424 @@
+#!/usr/bin/env python3
+"""Summarize Unity level run JSONL logs for quick calibration/testing review."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Any, Iterable
+
+
+DEFAULT_LOG_PATHS = [
+    Path.home() / "Library/Application Support/DefaultCompany/EmotionalPlatformer/RunLogs/level_runs.jsonl",
+    Path.cwd() / "RunLogs" / "level_runs.jsonl",
+]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Read and summarize EmotionalPlatformer level_runs.jsonl logs."
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        help="Path to level_runs.jsonl. If omitted, tries the default Unity persistent-data location.",
+    )
+    return parser.parse_args()
+
+
+def resolve_log_path(cli_path: str | None) -> Path:
+    if cli_path:
+        return Path(cli_path).expanduser().resolve()
+
+    for candidate in DEFAULT_LOG_PATHS:
+        if candidate.exists():
+            return candidate
+
+    checked = "\n".join(f"  - {path}" for path in DEFAULT_LOG_PATHS)
+    raise FileNotFoundError(
+        "Could not find level_runs.jsonl automatically. Checked:\n" + checked
+    )
+
+
+def load_runs(path: Path) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                runs.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON on line {line_number}: {exc}") from exc
+    return runs
+
+
+def fmt_num(value: Any, digits: int = 2) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            return "-"
+        return f"{value:.{digits}f}" if isinstance(value, float) else str(value)
+    return str(value)
+
+
+def effective_chunk_name(slot: dict[str, Any]) -> str:
+    return slot.get("spawnedChunkName") or slot.get("selectedPrefabName") or "Unknown"
+
+
+def effective_chunk_difficulty(slot: dict[str, Any]) -> float | None:
+    spawned = slot.get("spawnedDifficulty", -1)
+    if isinstance(spawned, (int, float)) and spawned >= 0:
+        return float(spawned)
+    selected = slot.get("selectedDifficulty", -1)
+    if isinstance(selected, (int, float)) and selected >= 0:
+        return float(selected)
+    return None
+
+
+def format_summary_line(run: dict[str, Any]) -> str:
+    adaptation = run.get("adaptation", {}) or {}
+    target = run.get("targetDifficultyBeforeRun")
+    actual = run.get("actualLevelDifficultyScore")
+    delta = None
+    if isinstance(target, (int, float)) and isinstance(actual, (int, float)):
+        delta = actual - target
+
+    return (
+        f"{run.get('runId', 'unknown')} | "
+        f"seed={run.get('runSeed')} | "
+        f"replay={run.get('isReplay', False)} | "
+        f"target={fmt_num(target)} | "
+        f"actual={fmt_num(actual)} | "
+        f"delta={fmt_num(delta)} | "
+        f"deaths={run.get('deathsThisLevel', 0)} | "
+        f"dpc={fmt_num(run.get('deathsPerChunk'))} | "
+        f"tpc={fmt_num(run.get('timePerChunk'))} | "
+        f"adapt={adaptation.get('decisionCode', '-') or '-'} "
+        f"({fmt_num(adaptation.get('targetBefore'))}->{fmt_num(adaptation.get('targetAfter'))})"
+    )
+
+
+def print_header(title: str) -> None:
+    print()
+    print(title)
+    print("=" * len(title))
+
+
+def print_latest_run_details(run: dict[str, Any]) -> None:
+    adaptation = run.get("adaptation", {}) or {}
+    print_header("Latest Run Detail")
+    print(f"Run ID: {run.get('runId', '-')}")
+    print(f"Generated At: {run.get('generatedAtUtc', '-')}")
+    print(f"Seed: {run.get('runSeed', '-')}")
+    print(f"Replay: {run.get('isReplay', False)}")
+    print(
+        f"Target: {fmt_num(run.get('targetDifficultyBeforeRun'))} | "
+        f"Actual: {fmt_num(run.get('actualLevelDifficultyScore'))} | "
+        f"Avg Chunk: {fmt_num(run.get('avgChunkDifficulty'))}"
+    )
+    print(
+        f"Deaths: {run.get('deathsThisLevel', 0)} | "
+        f"Deaths/Chunk: {fmt_num(run.get('deathsPerChunk'))} | "
+        f"Time/Chunk: {fmt_num(run.get('timePerChunk'))} | "
+        f"Time: {fmt_num(run.get('levelTimeSeconds'))}s"
+    )
+    print(
+        f"Chunks: {run.get('chunkCountThisLevel', 0)} | "
+        f"Hazards: {run.get('hazardChunkCount', 0)} | "
+        f"Estimated Jumps: {run.get('totalEstimatedJumps', 0)} | "
+        f"Vertical: {run.get('verticalChunkCount', 0)}"
+    )
+    print(
+        f"Adaptation: {adaptation.get('decisionCode', '-') or '-'} | "
+        f"{adaptation.get('decisionText', '-') or '-'} | "
+        f"{fmt_num(adaptation.get('targetBefore'))} -> {fmt_num(adaptation.get('targetAfter'))}"
+    )
+
+
+def slot_rows_for_table(slots: Iterable[dict[str, Any]]) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for slot in slots:
+        slot_target = slot.get("slotTargetDifficulty") if slot.get("hasSlotTargetDifficulty") else None
+        eff_diff = effective_chunk_difficulty(slot)
+        delta = None
+        if slot_target is not None and eff_diff is not None:
+            delta = eff_diff - float(slot_target)
+        rows.append(
+            [
+                str(slot.get("sequenceIndex", "-")),
+                str(slot.get("generatedSlotIndex", "-")),
+                fmt_num(slot_target),
+                slot.get("selectedPrefabName", "-") or "-",
+                fmt_num(slot.get("selectedDifficulty"), 0),
+                slot.get("spawnedChunkName", "-") or "-",
+                fmt_num(slot.get("spawnedDifficulty"), 0),
+                fmt_num(delta),
+                slot.get("replacementMode", "-") or "-",
+                str(slot.get("deathsAttributedToSlot", 0)),
+            ]
+        )
+    return rows
+
+
+def print_table(headers: list[str], rows: list[list[str]]) -> None:
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(cell))
+
+    def format_row(row: list[str]) -> str:
+        return " | ".join(cell.ljust(widths[idx]) for idx, cell in enumerate(row))
+
+    print(format_row(headers))
+    print("-+-".join("-" * width for width in widths))
+    for row in rows:
+        print(format_row(row))
+
+
+def print_latest_slot_table(run: dict[str, Any]) -> None:
+    print_header("Latest Run Slot Table")
+    slots = run.get("slots", []) or []
+    if not slots:
+        print("No slot records.")
+        return
+
+    headers = [
+        "seq",
+        "gen",
+        "target",
+        "selected",
+        "selDiff",
+        "spawned",
+        "spnDiff",
+        "delta",
+        "replace",
+        "deaths",
+    ]
+    print_table(headers, slot_rows_for_table(slots))
+
+
+def selected_vs_spawned_mismatches(slots: Iterable[dict[str, Any]]) -> list[str]:
+    messages: list[str] = []
+    for slot in slots:
+        selected_name = slot.get("selectedPrefabName")
+        spawned_name = slot.get("spawnedChunkName")
+        selected_diff = slot.get("selectedDifficulty")
+        spawned_diff = slot.get("spawnedDifficulty")
+        if not selected_name or not spawned_name:
+            continue
+
+        name_changed = selected_name != spawned_name
+        diff_changed = (
+            isinstance(selected_diff, (int, float))
+            and isinstance(spawned_diff, (int, float))
+            and selected_diff >= 0
+            and spawned_diff >= 0
+            and float(selected_diff) != float(spawned_diff)
+        )
+
+        if name_changed or diff_changed:
+            messages.append(
+                f"slot {slot.get('sequenceIndex')}: {selected_name} ({fmt_num(selected_diff, 0)}) -> "
+                f"{spawned_name} ({fmt_num(spawned_diff, 0)}) [{slot.get('replacementMode', '-')}]"
+            )
+    return messages
+
+
+def late_slot_delta_messages(slots: Iterable[dict[str, Any]]) -> list[str]:
+    generated_slots = [slot for slot in slots if slot.get("hasSlotTargetDifficulty")]
+    if not generated_slots:
+        return []
+
+    generated_slots = sorted(generated_slots, key=lambda slot: slot.get("generatedSlotIndex", -1))
+    late_slots = generated_slots[-3:]
+    messages: list[str] = []
+
+    for slot in late_slots:
+        target = slot.get("slotTargetDifficulty")
+        eff_diff = effective_chunk_difficulty(slot)
+        if not isinstance(target, (int, float)) or eff_diff is None:
+            continue
+        delta = eff_diff - float(target)
+        if delta <= -1.0:
+            messages.append(
+                f"late-slot undershoot: slot {slot.get('sequenceIndex')} target {fmt_num(target)} "
+                f"but effective difficulty {fmt_num(eff_diff)} ({effective_chunk_name(slot)})"
+            )
+        elif delta >= 1.0:
+            messages.append(
+                f"late-slot overshoot: slot {slot.get('sequenceIndex')} target {fmt_num(target)} "
+                f"but effective difficulty {fmt_num(eff_diff)} ({effective_chunk_name(slot)})"
+            )
+
+    avg_delta_values = []
+    for slot in late_slots:
+        target = slot.get("slotTargetDifficulty")
+        eff_diff = effective_chunk_difficulty(slot)
+        if isinstance(target, (int, float)) and eff_diff is not None:
+            avg_delta_values.append(eff_diff - float(target))
+
+    if avg_delta_values:
+        avg_delta = sum(avg_delta_values) / len(avg_delta_values)
+        if avg_delta <= -0.75:
+            messages.append(f"late-slot average undershoot: {avg_delta:.2f}")
+        elif avg_delta >= 0.75:
+            messages.append(f"late-slot average overshoot: {avg_delta:.2f}")
+
+    return messages
+
+
+def death_concentration_messages(run: dict[str, Any]) -> list[str]:
+    messages: list[str] = []
+    total_deaths = int(run.get("deathsThisLevel", 0) or 0)
+    slots = run.get("slots", []) or []
+    if total_deaths <= 0 or not slots:
+        return messages
+
+    by_slot = sorted(
+        ((slot.get("sequenceIndex", -1), int(slot.get("deathsAttributedToSlot", 0) or 0), effective_chunk_name(slot)) for slot in slots),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    top_slot_index, top_slot_deaths, top_slot_name = by_slot[0]
+    if top_slot_deaths > 0:
+        share = top_slot_deaths / max(1, total_deaths)
+        if share >= 0.5:
+            messages.append(
+                f"death concentration: slot {top_slot_index} ({top_slot_name}) accounts for "
+                f"{top_slot_deaths}/{total_deaths} deaths"
+            )
+
+    death_events = run.get("deathEvents", []) or []
+    chunk_counter = Counter(event.get("chunkName", "Unknown") for event in death_events)
+    if chunk_counter:
+        chunk_name, count = chunk_counter.most_common(1)[0]
+        if count / max(1, total_deaths) >= 0.5:
+            messages.append(
+                f"death concentration by chunk: {chunk_name} accounts for {count}/{total_deaths} deaths"
+            )
+
+    return messages
+
+
+def print_latest_warnings(run: dict[str, Any]) -> None:
+    print_header("Latest Run Warnings / Flags")
+    warnings = []
+    warnings.extend(late_slot_delta_messages(run.get("slots", []) or []))
+    warnings.extend(death_concentration_messages(run))
+
+    mismatches = selected_vs_spawned_mismatches(run.get("slots", []) or [])
+    if mismatches:
+        warnings.append(f"selected vs spawned mismatches: {len(mismatches)}")
+        warnings.extend(f"  - {message}" for message in mismatches[:5])
+
+    if not warnings:
+        print("No major flags from the current heuristic checks.")
+        return
+
+    for message in warnings:
+        print(f"- {message}")
+
+
+def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
+    print_header("Aggregate Summary")
+    run_count = len(runs)
+    avg_target = average(run.get("targetDifficultyBeforeRun") for run in runs)
+    avg_actual = average(run.get("actualLevelDifficultyScore") for run in runs)
+    avg_deaths = average(run.get("deathsThisLevel") for run in runs)
+    avg_deaths_per_chunk = average(run.get("deathsPerChunk") for run in runs)
+    avg_time_per_chunk = average(run.get("timePerChunk") for run in runs)
+
+    print(
+        f"Runs: {run_count} | "
+        f"Avg target: {fmt_num(avg_target)} | "
+        f"Avg actual: {fmt_num(avg_actual)} | "
+        f"Avg deaths: {fmt_num(avg_deaths)} | "
+        f"Avg dpc: {fmt_num(avg_deaths_per_chunk)} | "
+        f"Avg tpc: {fmt_num(avg_time_per_chunk)}"
+    )
+
+    selected_counter: Counter[str] = Counter()
+    replaced_counter: Counter[str] = Counter()
+    death_slot_counter: Counter[str] = Counter()
+    death_chunk_counter: Counter[str] = Counter()
+    adaptation_counter: Counter[str] = Counter()
+
+    for run in runs:
+        adaptation = run.get("adaptation", {}) or {}
+        adaptation_counter[adaptation.get("decisionCode", "unknown") or "unknown"] += 1
+        for slot in run.get("slots", []) or []:
+            selected_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
+            if slot.get("replacementMode") and slot.get("replacementMode") != "none":
+                replaced_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
+            slot_deaths = int(slot.get("deathsAttributedToSlot", 0) or 0)
+            if slot_deaths > 0:
+                death_slot_counter[f"slot {slot.get('sequenceIndex')}: {effective_chunk_name(slot)}"] += slot_deaths
+
+        for event in run.get("deathEvents", []) or []:
+            death_chunk_counter[event.get("chunkName", "Unknown") or "Unknown"] += 1
+
+    print_top_counter("Most selected chunks", selected_counter, 5)
+    print_top_counter("Most replaced selected chunks", replaced_counter, 5)
+    print_top_counter("Death-heavy slots", death_slot_counter, 5)
+    print_top_counter("Death-heavy chunks", death_chunk_counter, 5)
+    print_top_counter("Adaptation decisions", adaptation_counter, 5)
+
+
+def print_top_counter(title: str, counter: Counter[str], limit: int) -> None:
+    print()
+    print(title + ":")
+    if not counter:
+        print("  - none")
+        return
+    for name, count in counter.most_common(limit):
+        print(f"  - {name}: {count}")
+
+
+def average(values: Iterable[Any]) -> float | None:
+    nums = [float(value) for value in values if isinstance(value, (int, float))]
+    if not nums:
+        return None
+    return sum(nums) / len(nums)
+
+
+def print_run_summaries(runs: list[dict[str, Any]]) -> None:
+    print_header("Run Summaries")
+    for run in runs:
+        print(format_summary_line(run))
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        path = resolve_log_path(args.path)
+        runs = load_runs(path)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if not runs:
+        print(f"No runs found in {path}", file=sys.stderr)
+        return 1
+
+    latest = runs[-1]
+
+    print(f"Log file: {path}")
+    print_run_summaries(runs)
+    print_latest_run_details(latest)
+    print_latest_slot_table(latest)
+    print_latest_warnings(latest)
+    print_aggregate_summary(runs)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
