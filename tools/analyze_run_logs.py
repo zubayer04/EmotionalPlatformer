@@ -142,6 +142,11 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
         f"{adaptation.get('decisionText', '-') or '-'} | "
         f"{fmt_num(adaptation.get('targetBefore'))} -> {fmt_num(adaptation.get('targetAfter'))}"
     )
+    if adaptation.get("controllerName") or adaptation.get("evidenceSummary"):
+        print(
+            f"Controller: {adaptation.get('controllerName', '-') or '-'} | "
+            f"{adaptation.get('evidenceSummary', '-') or '-'}"
+        )
 
 
 def slot_rows_for_table(slots: Iterable[dict[str, Any]]) -> list[list[str]]:
@@ -328,6 +333,183 @@ def print_latest_warnings(run: dict[str, Any]) -> None:
         print(f"- {message}")
 
 
+def run_target_delta(run: dict[str, Any]) -> float | None:
+    target = run.get("targetDifficultyBeforeRun")
+    actual = run.get("actualLevelDifficultyScore")
+    if isinstance(target, (int, float)) and isinstance(actual, (int, float)):
+        return float(actual) - float(target)
+    return None
+
+
+def iter_slot_target_deltas(runs: Iterable[dict[str, Any]]) -> Iterable[float]:
+    for run in runs:
+        for slot in run.get("slots", []) or []:
+            if not slot.get("hasSlotTargetDifficulty"):
+                continue
+            target = slot.get("slotTargetDifficulty")
+            eff_diff = effective_chunk_difficulty(slot)
+            if isinstance(target, (int, float)) and eff_diff is not None:
+                yield eff_diff - float(target)
+
+
+def progression_delta_for_run(run: dict[str, Any]) -> float | None:
+    slots = [
+        slot
+        for slot in run.get("slots", []) or []
+        if slot.get("hasSlotTargetDifficulty") and effective_chunk_difficulty(slot) is not None
+    ]
+    if len(slots) < 3:
+        return None
+
+    slots = sorted(slots, key=lambda slot: slot.get("generatedSlotIndex", -1))
+    region_size = max(1, len(slots) // 3)
+    first = [effective_chunk_difficulty(slot) for slot in slots[:region_size]]
+    last = [effective_chunk_difficulty(slot) for slot in slots[-region_size:]]
+
+    first_values = [value for value in first if value is not None]
+    last_values = [value for value in last if value is not None]
+    if not first_values or not last_values:
+        return None
+
+    return (sum(last_values) / len(last_values)) - (sum(first_values) / len(first_values))
+
+
+def replacement_difficulty_deltas(runs: Iterable[dict[str, Any]]) -> list[float]:
+    deltas: list[float] = []
+    for run in runs:
+        for slot in run.get("slots", []) or []:
+            if not slot.get("replacementAttempted"):
+                continue
+            selected = slot.get("selectedDifficulty")
+            spawned = slot.get("spawnedDifficulty")
+            if (
+                isinstance(selected, (int, float))
+                and isinstance(spawned, (int, float))
+                and selected >= 0
+                and spawned >= 0
+            ):
+                deltas.append(float(spawned) - float(selected))
+    return deltas
+
+
+def adaptation_audit_messages(runs: Iterable[dict[str, Any]]) -> list[str]:
+    messages: list[str] = []
+    for run in runs:
+        adaptation = run.get("adaptation", {}) or {}
+        before = adaptation.get("targetBefore")
+        after = adaptation.get("targetAfter")
+        target_delta = run_target_delta(run)
+        run_id = run.get("runId", "unknown")
+
+        if not isinstance(before, (int, float)) or not isinstance(after, (int, float)):
+            continue
+        if target_delta is None:
+            continue
+
+        target_change = float(after) - float(before)
+        clean_run = bool(adaptation.get("cleanRun"))
+
+        if target_change > 0 and target_delta > 0.75:
+            messages.append(
+                f"{run_id}: increased target despite delivered difficulty overshooting target by {target_delta:.2f}"
+            )
+        elif target_change == 0 and clean_run and target_delta > 1.0:
+            messages.append(
+                f"{run_id}: clean run kept target while delivered difficulty overshot by {target_delta:.2f}"
+            )
+        elif target_change < 0 and target_delta < -0.75:
+            messages.append(
+                f"{run_id}: decreased target even though delivered difficulty was below target by {abs(target_delta):.2f}"
+            )
+
+    return messages
+
+
+def print_calibration_evaluation(runs: list[dict[str, Any]]) -> None:
+    print_header("Calibration Evaluation")
+
+    target_deltas = [delta for delta in (run_target_delta(run) for run in runs) if delta is not None]
+    slot_deltas = list(iter_slot_target_deltas(runs))
+    progression_deltas = [
+        delta for delta in (progression_delta_for_run(run) for run in runs) if delta is not None
+    ]
+    replacement_deltas = replacement_difficulty_deltas(runs)
+
+    if target_deltas:
+        avg_delta = sum(target_deltas) / len(target_deltas)
+        avg_abs_delta = sum(abs(delta) for delta in target_deltas) / len(target_deltas)
+        overshoots = sum(1 for delta in target_deltas if delta > 1.0)
+        undershoots = sum(1 for delta in target_deltas if delta < -1.0)
+        print(
+            f"Target tracking: runs={len(target_deltas)} | "
+            f"avg actual-target={avg_delta:.2f} | avg abs error={avg_abs_delta:.2f} | "
+            f"overshoot>1={overshoots} | undershoot>1={undershoots}"
+        )
+    else:
+        print("Target tracking: no target/actual difficulty pairs available.")
+
+    if slot_deltas:
+        avg_slot_delta = sum(slot_deltas) / len(slot_deltas)
+        avg_abs_slot_delta = sum(abs(delta) for delta in slot_deltas) / len(slot_deltas)
+        large_errors = sum(1 for delta in slot_deltas if abs(delta) > 1.0)
+        print(
+            f"Slot target tracking: slots={len(slot_deltas)} | "
+            f"avg selected-target={avg_slot_delta:.2f} | avg abs error={avg_abs_slot_delta:.2f} | "
+            f"abs error>1={large_errors}"
+        )
+    else:
+        print("Slot target tracking: no slot target records available.")
+
+    if progression_deltas:
+        avg_progression = sum(progression_deltas) / len(progression_deltas)
+        improving_runs = sum(1 for delta in progression_deltas if delta > 0)
+        print(
+            f"Ramp quality: avg last-third minus first-third={avg_progression:.2f} | "
+            f"runs ramping upward={improving_runs}/{len(progression_deltas)}"
+        )
+    else:
+        print("Ramp quality: not enough slot data to evaluate.")
+
+    attempted = sum(
+        1
+        for run in runs
+        for slot in run.get("slots", []) or []
+        if slot.get("replacementAttempted")
+    )
+    succeeded = sum(
+        1
+        for run in runs
+        for slot in run.get("slots", []) or []
+        if slot.get("replacementSucceeded")
+    )
+    if attempted > 0:
+        avg_replacement_delta = (
+            sum(replacement_deltas) / len(replacement_deltas) if replacement_deltas else None
+        )
+        avg_abs_replacement_delta = (
+            sum(abs(delta) for delta in replacement_deltas) / len(replacement_deltas)
+            if replacement_deltas
+            else None
+        )
+        print(
+            f"Replacement stability: attempted={attempted} | succeeded={succeeded} | "
+            f"avg diff shift={fmt_num(avg_replacement_delta)} | "
+            f"avg abs diff shift={fmt_num(avg_abs_replacement_delta)}"
+        )
+    else:
+        print("Replacement stability: no generated replacement attempts in these logs.")
+
+    audit_messages = adaptation_audit_messages(runs)
+    print("Adaptation audit:")
+    if not audit_messages:
+        print("  - no target-change calibration flags found")
+    else:
+        for message in audit_messages[:8]:
+            print(f"  - {message}")
+        if len(audit_messages) > 8:
+            print(f"  - ... {len(audit_messages) - 8} more")
+
+
 def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     print_header("Aggregate Summary")
     run_count = len(runs)
@@ -416,6 +598,7 @@ def main() -> int:
     print_latest_run_details(latest)
     print_latest_slot_table(latest)
     print_latest_warnings(latest)
+    print_calibration_evaluation(runs)
     print_aggregate_summary(runs)
     return 0
 

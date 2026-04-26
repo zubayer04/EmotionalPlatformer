@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     [Serializable]
     public class RunRecord
@@ -95,20 +95,31 @@ public static class LevelRunLog
         public float deathsPerChunk;
         public float timePerChunk;
         public float actualDifficulty;
+        public float actualTargetDelta;
+        public float performanceStrain;
+        public float smoothedStrain;
 
         public bool cleanRun;
         public bool tooHard;
         public bool tooEasySingleRun;
         public bool tooEasyByStreak;
+        public bool actualDifficultyOvershoot;
+        public bool actualDifficultyUndershoot;
+        public bool increaseBlockedByActualOvershoot;
         public int cleanRunStreakBefore;
         public int cleanRunStreakAfter;
 
+        public string controllerName;
+        public string evidenceSummary;
         public float hardDeathsPerChunkThreshold;
         public float slowTimePerChunkThreshold;
         public float easyDeathsPerChunkThreshold;
         public float fastTimePerChunkThreshold;
         public float targetDifficultyStep;
         public int cleanRunStreakThreshold;
+        public float actualDifficultyOvershootTolerance;
+        public float actualDifficultyUndershootTolerance;
+        public float strainSmoothing;
     }
 
     public static string GetLogDirectoryPath()
