@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
 
     [Serializable]
     public class RunRecord
@@ -106,6 +106,7 @@ public static class LevelRunLog
         public bool actualDifficultyOvershoot;
         public bool actualDifficultyUndershoot;
         public bool increaseBlockedByActualOvershoot;
+        public bool minorErrorGuardApplied;
         public int cleanRunStreakBefore;
         public int cleanRunStreakAfter;
 

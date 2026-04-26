@@ -3,6 +3,8 @@ using UnityEngine;
 
 public static class AdaptiveDifficultyController
 {
+    private const float MinorOvershootGrace = 0.5f;
+
     [Serializable]
     public struct Settings
     {
@@ -51,6 +53,7 @@ public static class AdaptiveDifficultyController
         public bool actualDifficultyOvershoot;
         public bool actualDifficultyUndershoot;
         public bool increaseBlockedByActualOvershoot;
+        public bool minorErrorGuardApplied;
 
         public int cleanRunStreakBefore;
         public int cleanRunStreakAfter;
@@ -105,6 +108,12 @@ public static class AdaptiveDifficultyController
             lowPressure &&
             !actualOvershoot;
 
+        bool minorErrorGuardApplied =
+            actualOvershoot &&
+            input.deathsThisLevel == 1 &&
+            lowPressure &&
+            actualTargetDelta <= settings.actualDifficultyOvershootTolerance + MinorOvershootGrace;
+
         bool increaseBlockedByActualOvershoot = false;
         string decisionCode;
         string decisionText;
@@ -118,10 +127,19 @@ public static class AdaptiveDifficultyController
         }
         else if (actualOvershoot && !cleanRun)
         {
-            cleanRunStreakAfter = 0;
-            newTarget -= settings.targetDifficultyStep;
-            decisionCode = "decrease_content_overshoot";
-            decisionText = "Delivered level overshot target under pressure -> decrease target";
+            if (minorErrorGuardApplied)
+            {
+                cleanRunStreakAfter = 0;
+                decisionCode = "keep_minor_error_content_overshot";
+                decisionText = "Single low-strain death with mild content overshoot -> keep target";
+            }
+            else
+            {
+                cleanRunStreakAfter = 0;
+                newTarget -= settings.targetDifficultyStep;
+                decisionCode = "decrease_content_overshoot";
+                decisionText = "Delivered level overshot target under pressure -> decrease target";
+            }
         }
         else if (tooEasySingleRun)
         {
@@ -170,6 +188,7 @@ public static class AdaptiveDifficultyController
             actualDifficultyOvershoot = actualOvershoot,
             actualDifficultyUndershoot = actualUndershoot,
             increaseBlockedByActualOvershoot = increaseBlockedByActualOvershoot,
+            minorErrorGuardApplied = minorErrorGuardApplied,
             cleanRunStreakBefore = input.cleanRunStreakBefore,
             cleanRunStreakAfter = cleanRunStreakAfter
         };
