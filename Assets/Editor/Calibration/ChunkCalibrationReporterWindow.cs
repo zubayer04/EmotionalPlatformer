@@ -408,6 +408,32 @@ public class ChunkCalibrationReporterWindow : EditorWindow
                 string selectedChunkName = prefab != null ? prefab.name : "<null>";
                 string selectedPrimaryTag = data != null ? data.primaryTag.ToString() : "Unknown";
                 float delta = data != null ? data.difficultyRating - slotTargetDifficulty : 0f;
+                GameObject previousPrefab = i > 0 ? sequence[i - 1] : null;
+                ChunkData previousData = previousPrefab != null ? previousPrefab.GetComponent<ChunkData>() : null;
+                string previousChunkName = previousPrefab != null ? previousPrefab.name : "<none>";
+                float transitionPressureMultiplier = 1f;
+                string transitionPressureReason = "none";
+
+                if (data != null && previousData != null)
+                {
+                    transitionPressureMultiplier = ChunkTransitionPressure.GetSelectionWeightMultiplier(
+                        previousChunkName,
+                        previousData.primaryTag,
+                        selectedChunkName,
+                        data.primaryTag,
+                        data.difficultyRating,
+                        slotTargetDifficulty,
+                        generator.targetDifficulty);
+
+                    transitionPressureReason = ChunkTransitionPressure.GetTransitionReason(
+                        previousChunkName,
+                        previousData.primaryTag,
+                        selectedChunkName,
+                        data.primaryTag,
+                        data.difficultyRating,
+                        slotTargetDifficulty,
+                        generator.targetDifficulty);
+                }
 
                 slotSamples.Add(new SequenceSlotSample
                 {
@@ -415,10 +441,13 @@ public class ChunkCalibrationReporterWindow : EditorWindow
                     seed = seed,
                     slotIndex = generatedSlotIndex + 1,
                     slotTargetDifficulty = slotTargetDifficulty,
+                    previousChunkName = previousChunkName,
                     selectedChunkName = selectedChunkName,
                     selectedPrimaryTag = selectedPrimaryTag,
                     selectedDifficulty = selectedDifficulty,
-                    deltaFromSlotTarget = delta
+                    deltaFromSlotTarget = delta,
+                    transitionPressureMultiplier = transitionPressureMultiplier,
+                    transitionPressureReason = transitionPressureReason
                 });
 
                 if (prefab == null)
@@ -433,6 +462,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         AppendSequenceRunDetails(sb, slotSamples);
         AppendSequenceSlotSummary(sb, slotSamples);
         AppendSequenceProgressionSummary(sb, slotSamples, warnings);
+        AppendSequenceTransitionPressureSummary(sb, slotSamples);
         AppendSequenceUsageSummary(sb, slotSamples, chunkUsage, tagUsage, chunks);
         AppendPoolSufficiencySnapshot(sb, slotSamples, chunkUsage, chunks, generator, warnings);
     }
@@ -453,8 +483,8 @@ public class ChunkCalibrationReporterWindow : EditorWindow
     private static void AppendSequenceRunDetails(StringBuilder sb, List<SequenceSlotSample> slotSamples)
     {
         sb.AppendLine("### Per-Run Slot Detail");
-        sb.AppendLine("Run | Seed | SlotIndex | SlotTargetDifficulty | SelectedChunk | SelectedPrimaryTag | SelectedDifficulty | DeltaFromSlotTarget");
-        sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | ---");
+        sb.AppendLine("Run | Seed | SlotIndex | SlotTargetDifficulty | PreviousChunk | SelectedChunk | SelectedPrimaryTag | SelectedDifficulty | DeltaFromSlotTarget | PressureMultiplier | PressureReason");
+        sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
 
         if (slotSamples.Count == 0)
         {
@@ -467,8 +497,9 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         {
             SequenceSlotSample sample = slotSamples[i];
             sb.AppendLine(
-                $"{sample.runIndex} | {sample.seed} | {sample.slotIndex} | {sample.slotTargetDifficulty:0.##} | {sample.selectedChunkName} | " +
-                $"{sample.selectedPrimaryTag} | {sample.selectedDifficulty} | {sample.deltaFromSlotTarget:+0.##;-0.##;0}");
+                $"{sample.runIndex} | {sample.seed} | {sample.slotIndex} | {sample.slotTargetDifficulty:0.##} | {sample.previousChunkName} | {sample.selectedChunkName} | " +
+                $"{sample.selectedPrimaryTag} | {sample.selectedDifficulty} | {sample.deltaFromSlotTarget:+0.##;-0.##;0} | " +
+                $"{sample.transitionPressureMultiplier:0.##} | {sample.transitionPressureReason}");
         }
 
         sb.AppendLine();
@@ -610,6 +641,53 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             sb.AppendLine($"reviewNotes: {string.Join("; ", notes)}");
             for (int i = 0; i < notes.Count; i++)
                 warnings.Add($"Sequence sampling: {notes[i]}.");
+        }
+
+        sb.AppendLine();
+    }
+
+    private static void AppendSequenceTransitionPressureSummary(StringBuilder sb, List<SequenceSlotSample> slotSamples)
+    {
+        sb.AppendLine("### Transition Pressure Summary");
+
+        if (slotSamples.Count == 0)
+        {
+            sb.AppendLine("No transition pressure summary is available.");
+            sb.AppendLine();
+            return;
+        }
+
+        int penalizedSelectedTransitions = 0;
+        Dictionary<string, int> reasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        for (int i = 0; i < slotSamples.Count; i++)
+        {
+            SequenceSlotSample sample = slotSamples[i];
+            if (sample.transitionPressureMultiplier >= 0.999f)
+                continue;
+
+            penalizedSelectedTransitions++;
+            IncrementCount(reasonCounts, sample.transitionPressureReason);
+        }
+
+        sb.AppendLine($"selectedTransitionsWithPressurePenalty: {penalizedSelectedTransitions}/{slotSamples.Count}");
+
+        if (reasonCounts.Count == 0)
+        {
+            sb.AppendLine("pressurePenaltyReasons: none selected in current sample");
+            sb.AppendLine();
+            return;
+        }
+
+        sb.AppendLine("PressureReason | Count");
+        sb.AppendLine("--- | ---");
+
+        List<string> reasons = new List<string>(reasonCounts.Keys);
+        reasons.Sort(StringComparer.Ordinal);
+        for (int i = 0; i < reasons.Count; i++)
+        {
+            string reason = reasons[i];
+            sb.AppendLine($"{reason} | {reasonCounts[reason]}");
         }
 
         sb.AppendLine();
@@ -1288,10 +1366,13 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         public int seed;
         public int slotIndex;
         public float slotTargetDifficulty;
+        public string previousChunkName;
         public string selectedChunkName;
         public string selectedPrimaryTag;
         public int selectedDifficulty;
         public float deltaFromSlotTarget;
+        public float transitionPressureMultiplier;
+        public string transitionPressureReason;
     }
 
     private class SequenceSlotAggregate

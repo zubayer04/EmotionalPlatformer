@@ -731,7 +731,16 @@ public class LevelGenerator : MonoBehaviour
             if (cd.difficultyRating > slotTargetDifficulty + 2f)
                 pacingWeight *= 0.65f;
 
-            float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight;
+            float transitionPressureWeight = ChunkTransitionPressure.GetSelectionWeightMultiplier(
+                previousPrefabName,
+                prev1,
+                candidates[i].name,
+                cd.primaryTag,
+                cd.difficultyRating,
+                slotTargetDifficulty,
+                targetDifficulty);
+
+            float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight * transitionPressureWeight;
             finalWeight = Mathf.Max(0.01f, finalWeight);
 
             weights.Add(finalWeight);
