@@ -436,6 +436,7 @@ public class LevelGenerator : MonoBehaviour
             }
         }
 
+        PopulateTransitionPressureRecords(currentRunLog);
         SpawnEndPointAt(LastExitWorld);
         RecalculateLevelBounds();
         RecalculateDifficultyStats();
@@ -827,6 +828,131 @@ public class LevelGenerator : MonoBehaviour
         slotRecord.generatedBlueprintSolidCount = features.solidCount;
         slotRecord.generatedBlueprintHazardCount = features.hazardCount;
         slotRecord.generatedBlueprintEstimatedExitDelta = features.estimatedExitDelta;
+    }
+
+    private void PopulateTransitionPressureRecords(LevelRunLog.RunRecord runRecord)
+    {
+        if (runRecord == null || runRecord.slots == null)
+            return;
+
+        runRecord.transitionPressureCount = 0;
+        runRecord.highPressureTransitionCount = 0;
+        runRecord.transitionPressureScore = 0f;
+
+        for (int i = 0; i < runRecord.slots.Count; i++)
+        {
+            LevelRunLog.SlotRecord current = runRecord.slots[i];
+            if (current == null)
+                continue;
+
+            current.hasPreviousTransition = false;
+            current.previousSpawnedChunkName = string.Empty;
+            current.transitionPressureMultiplier = 1f;
+            current.transitionPressurePenalized = false;
+            current.transitionPressureReason = "none";
+            current.transitionPressureSeverity = "none";
+            current.transitionPressureScore = 0f;
+
+            if (i == 0)
+                continue;
+
+            LevelRunLog.SlotRecord previous = runRecord.slots[i - 1];
+            if (previous == null)
+                continue;
+
+            string previousName = GetEffectiveSlotChunkName(previous);
+            string currentName = GetEffectiveSlotChunkName(current);
+            if (string.IsNullOrEmpty(previousName) || string.IsNullOrEmpty(currentName))
+                continue;
+
+            ChunkTag previousTag = GetEffectiveSlotChunkTag(previous);
+            ChunkTag currentTag = GetEffectiveSlotChunkTag(current);
+            int currentDifficulty = GetEffectiveSlotDifficulty(current);
+            float slotTarget = current.hasSlotTargetDifficulty ? current.slotTargetDifficulty : targetDifficulty;
+
+            float multiplier = ChunkTransitionPressure.GetSelectionWeightMultiplier(
+                previousName,
+                previousTag,
+                currentName,
+                currentTag,
+                currentDifficulty,
+                slotTarget,
+                targetDifficulty);
+
+            string reason = ChunkTransitionPressure.GetTransitionReason(
+                previousName,
+                previousTag,
+                currentName,
+                currentTag,
+                currentDifficulty,
+                slotTarget,
+                targetDifficulty);
+
+            string severity = ChunkTransitionPressure.GetSeverityFromMultiplier(multiplier);
+            float pressureScore = ChunkTransitionPressure.GetPressureScoreFromMultiplier(multiplier);
+
+            current.hasPreviousTransition = true;
+            current.previousSpawnedChunkName = previousName;
+            current.transitionPressureMultiplier = multiplier;
+            current.transitionPressurePenalized = pressureScore > 0f;
+            current.transitionPressureReason = reason;
+            current.transitionPressureSeverity = severity;
+            current.transitionPressureScore = pressureScore;
+
+            if (pressureScore > 0f)
+            {
+                runRecord.transitionPressureCount++;
+                runRecord.transitionPressureScore += pressureScore;
+
+                if (severity == "strong" || severity == "severe")
+                    runRecord.highPressureTransitionCount++;
+            }
+        }
+    }
+
+    private string GetEffectiveSlotChunkName(LevelRunLog.SlotRecord slot)
+    {
+        if (slot == null)
+            return string.Empty;
+
+        if (!string.IsNullOrEmpty(slot.spawnedChunkName))
+            return slot.spawnedChunkName;
+
+        return slot.selectedPrefabName ?? string.Empty;
+    }
+
+    private ChunkTag GetEffectiveSlotChunkTag(LevelRunLog.SlotRecord slot)
+    {
+        if (slot == null)
+            return ChunkTag.Rest;
+
+        if (TryParseChunkTag(slot.spawnedPrimaryTag, out ChunkTag spawnedTag))
+            return spawnedTag;
+
+        if (TryParseChunkTag(slot.selectedPrimaryTag, out ChunkTag selectedTag))
+            return selectedTag;
+
+        return ChunkTag.Rest;
+    }
+
+    private int GetEffectiveSlotDifficulty(LevelRunLog.SlotRecord slot)
+    {
+        if (slot == null)
+            return 0;
+
+        if (slot.spawnedDifficulty >= 0)
+            return slot.spawnedDifficulty;
+
+        return Mathf.Max(0, slot.selectedDifficulty);
+    }
+
+    private bool TryParseChunkTag(string value, out ChunkTag tag)
+    {
+        if (!string.IsNullOrEmpty(value))
+            return Enum.TryParse(value, out tag);
+
+        tag = ChunkTag.Rest;
+        return false;
     }
 
     private float GetSlotTargetDifficultyForGeneratedSlotIndex(int generatedSlotIndex)

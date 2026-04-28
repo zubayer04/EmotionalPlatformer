@@ -138,6 +138,11 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
         f"Vertical: {run.get('verticalChunkCount', 0)}"
     )
     print(
+        f"Transition Pressure: count={run.get('transitionPressureCount', 0)} | "
+        f"high={run.get('highPressureTransitionCount', 0)} | "
+        f"score={fmt_num(run.get('transitionPressureScore'))}"
+    )
+    print(
         f"Adaptation: {adaptation.get('decisionCode', '-') or '-'} | "
         f"{adaptation.get('decisionText', '-') or '-'} | "
         f"{fmt_num(adaptation.get('targetBefore'))} -> {fmt_num(adaptation.get('targetAfter'))}"
@@ -170,6 +175,8 @@ def slot_rows_for_table(slots: Iterable[dict[str, Any]]) -> list[list[str]]:
                 slot.get("replacementMode", "-") or "-",
                 slot.get("replacementReason", "-") or "-",
                 slot.get("generatedRejectionReason", "-") or "-",
+                slot.get("transitionPressureSeverity", "-") or "-",
+                slot.get("transitionPressureReason", "-") or "-",
                 str(slot.get("deathsAttributedToSlot", 0)),
             ]
         )
@@ -210,6 +217,8 @@ def print_latest_slot_table(run: dict[str, Any]) -> None:
         "replace",
         "reason",
         "accept/reject",
+        "pressure",
+        "pressureReason",
         "deaths",
     ]
     print_table(headers, slot_rows_for_table(slots))
@@ -325,6 +334,7 @@ def print_latest_warnings(run: dict[str, Any]) -> None:
     warnings = []
     warnings.extend(late_slot_delta_messages(run.get("slots", []) or []))
     warnings.extend(death_concentration_messages(run))
+    warnings.extend(transition_pressure_messages(run.get("slots", []) or []))
 
     mismatches = selected_vs_spawned_mismatches(run.get("slots", []) or [])
     if mismatches:
@@ -337,6 +347,26 @@ def print_latest_warnings(run: dict[str, Any]) -> None:
 
     for message in warnings:
         print(f"- {message}")
+
+
+def transition_pressure_messages(slots: Iterable[dict[str, Any]]) -> list[str]:
+    messages: list[str] = []
+    for slot in slots:
+        if not slot.get("transitionPressurePenalized"):
+            continue
+
+        previous = slot.get("previousSpawnedChunkName", "-") or "-"
+        current = effective_chunk_name(slot)
+        severity = slot.get("transitionPressureSeverity", "unknown") or "unknown"
+        reason = slot.get("transitionPressureReason", "unknown") or "unknown"
+        multiplier = slot.get("transitionPressureMultiplier")
+
+        messages.append(
+            f"transition pressure: {previous} -> {current} "
+            f"[{severity}; {reason}; multiplier={fmt_num(multiplier)}]"
+        )
+
+    return messages
 
 
 def run_target_delta(run: dict[str, Any]) -> float | None:
@@ -524,6 +554,9 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     avg_deaths = average(run.get("deathsThisLevel") for run in runs)
     avg_deaths_per_chunk = average(run.get("deathsPerChunk") for run in runs)
     avg_time_per_chunk = average(run.get("timePerChunk") for run in runs)
+    avg_transition_pressure = average(run.get("transitionPressureScore") for run in runs)
+    total_pressure_count = sum(int(run.get("transitionPressureCount", 0) or 0) for run in runs)
+    total_high_pressure_count = sum(int(run.get("highPressureTransitionCount", 0) or 0) for run in runs)
 
     print(
         f"Runs: {run_count} | "
@@ -532,6 +565,11 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         f"Avg deaths: {fmt_num(avg_deaths)} | "
         f"Avg dpc: {fmt_num(avg_deaths_per_chunk)} | "
         f"Avg tpc: {fmt_num(avg_time_per_chunk)}"
+    )
+    print(
+        f"Transition pressure: total={total_pressure_count} | "
+        f"high={total_high_pressure_count} | "
+        f"avg score/run={fmt_num(avg_transition_pressure)}"
     )
 
     selected_counter: Counter[str] = Counter()
@@ -543,6 +581,8 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     death_slot_counter: Counter[str] = Counter()
     death_chunk_counter: Counter[str] = Counter()
     adaptation_counter: Counter[str] = Counter()
+    transition_reason_counter: Counter[str] = Counter()
+    transition_pair_counter: Counter[str] = Counter()
 
     for run in runs:
         adaptation = run.get("adaptation", {}) or {}
@@ -558,6 +598,12 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
             slot_deaths = int(slot.get("deathsAttributedToSlot", 0) or 0)
             if slot_deaths > 0:
                 death_slot_counter[f"slot {slot.get('sequenceIndex')}: {effective_chunk_name(slot)}"] += slot_deaths
+            if slot.get("transitionPressurePenalized"):
+                reason = slot.get("transitionPressureReason", "unknown") or "unknown"
+                previous = slot.get("previousSpawnedChunkName", "Unknown") or "Unknown"
+                current = effective_chunk_name(slot)
+                transition_reason_counter[reason] += 1
+                transition_pair_counter[f"{previous} -> {current}"] += 1
 
         for event in run.get("deathEvents", []) or []:
             death_chunk_counter[event.get("chunkName", "Unknown") or "Unknown"] += 1
@@ -570,6 +616,8 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     print_top_counter("Generated blueprint layouts", generated_rows_counter, 5)
     print_top_counter("Death-heavy slots", death_slot_counter, 5)
     print_top_counter("Death-heavy chunks", death_chunk_counter, 5)
+    print_top_counter("Transition pressure reasons", transition_reason_counter, 5)
+    print_top_counter("Transition pressure pairs", transition_pair_counter, 5)
     print_top_counter("Adaptation decisions", adaptation_counter, 5)
 
 

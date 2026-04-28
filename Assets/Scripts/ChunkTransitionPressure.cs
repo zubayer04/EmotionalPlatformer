@@ -126,6 +126,40 @@ public static class ChunkTransitionPressure
         return "none";
     }
 
+    public static string GetSeverityFromMultiplier(float multiplier)
+    {
+        if (multiplier <= SeverePenalty + 0.001f)
+            return "severe";
+
+        if (multiplier <= StrongPenalty + 0.001f)
+            return "strong";
+
+        if (multiplier <= ModeratePenalty + 0.001f)
+            return "moderate";
+
+        if (multiplier <= LightPenalty + 0.001f)
+            return "light";
+
+        return "none";
+    }
+
+    public static float GetPressureScoreFromMultiplier(float multiplier)
+    {
+        if (multiplier <= SeverePenalty + 0.001f)
+            return 1f;
+
+        if (multiplier <= StrongPenalty + 0.001f)
+            return 0.75f;
+
+        if (multiplier <= ModeratePenalty + 0.001f)
+            return 0.5f;
+
+        if (multiplier <= LightPenalty + 0.001f)
+            return 0.25f;
+
+        return 0f;
+    }
+
     public static bool IsHighPressure(string chunkName, ChunkTag tag)
     {
         ChunkTransitionProfile profile = GetProfile(chunkName, tag);

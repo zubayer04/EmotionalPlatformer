@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 5;
+    public const int SchemaVersion = 6;
 
     [Serializable]
     public class RunRecord
@@ -35,6 +35,9 @@ public static class LevelRunLog
         public int hazardChunkCount;
         public int totalEstimatedJumps;
         public int verticalChunkCount;
+        public int transitionPressureCount;
+        public int highPressureTransitionCount;
+        public float transitionPressureScore;
 
         public List<SlotRecord> slots = new List<SlotRecord>();
         public List<DeathEventRecord> deathEvents = new List<DeathEventRecord>();
@@ -81,6 +84,14 @@ public static class LevelRunLog
         public int generatedBlueprintSolidCount;
         public int generatedBlueprintHazardCount;
         public Vector2 generatedBlueprintEstimatedExitDelta;
+
+        public bool hasPreviousTransition;
+        public string previousSpawnedChunkName;
+        public float transitionPressureMultiplier = 1f;
+        public bool transitionPressurePenalized;
+        public string transitionPressureReason;
+        public string transitionPressureSeverity;
+        public float transitionPressureScore;
 
         public int deathsAttributedToSlot;
     }
