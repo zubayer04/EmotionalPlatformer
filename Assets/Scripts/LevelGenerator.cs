@@ -905,6 +905,8 @@ public class LevelGenerator : MonoBehaviour
         float slotTargetDifficulty = Mathf.Lerp(startDifficultyBias, targetDifficulty, progress);
         DifficultyBand band = GetDifficultyBand(targetDifficulty);
 
+        candidates = ApplyExtremeOutlierEligibility(candidates, slotTargetDifficulty, targetDifficulty, slotIndex);
+
         float totalWeight = 0f;
         List<float> weights = new List<float>(candidates.Count);
 
@@ -944,6 +946,11 @@ public class LevelGenerator : MonoBehaviour
             if (cd.difficultyRating > slotTargetDifficulty + 2f)
                 pacingWeight *= 0.65f;
 
+            float extremeOutlierWeight = GetExtremeOutlierDifficultyWeight(
+                cd,
+                slotTargetDifficulty,
+                targetDifficulty);
+
             float transitionPressureWeight = ChunkTransitionPressure.GetSelectionWeightMultiplier(
                 previousPrefabName,
                 prev1,
@@ -953,7 +960,7 @@ public class LevelGenerator : MonoBehaviour
                 slotTargetDifficulty,
                 targetDifficulty);
 
-            float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight * transitionPressureWeight;
+            float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight * extremeOutlierWeight * transitionPressureWeight;
             finalWeight = Mathf.Max(0.01f, finalWeight);
 
             weights.Add(finalWeight);
@@ -971,6 +978,59 @@ public class LevelGenerator : MonoBehaviour
         }
 
         return candidates[candidates.Count - 1];
+    }
+
+    private List<GameObject> ApplyExtremeOutlierEligibility(
+        List<GameObject> candidates,
+        float slotTargetDifficulty,
+        float levelTargetDifficulty,
+        int slotIndex)
+    {
+        if (candidates == null || candidates.Count == 0)
+            return candidates;
+
+        List<GameObject> eligible = new List<GameObject>(candidates.Count);
+
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            GameObject candidate = candidates[i];
+            if (candidate == null)
+                continue;
+
+            ChunkData cd = candidate.GetComponent<ChunkData>();
+            if (cd == null || !IsExtremeOutlierDisallowed(cd, slotTargetDifficulty, levelTargetDifficulty, slotIndex))
+                eligible.Add(candidate);
+        }
+
+        return eligible.Count > 0 ? eligible : candidates;
+    }
+
+    private bool IsExtremeOutlierDisallowed(
+        ChunkData cd,
+        float slotTargetDifficulty,
+        float levelTargetDifficulty,
+        int slotIndex)
+    {
+        if (cd == null)
+            return false;
+
+        bool extremeForSlot = cd.difficultyRating >= slotTargetDifficulty + 4f;
+        int lateSlotStart = Mathf.Max(0, totalChunks - 3);
+        bool beforeLateSlots = slotIndex < lateSlotStart;
+        bool extremeEarlyForLevel = levelTargetDifficulty <= 5f && cd.difficultyRating >= 8 && beforeLateSlots;
+
+        return extremeForSlot || extremeEarlyForLevel;
+    }
+
+    private float GetExtremeOutlierDifficultyWeight(ChunkData cd, float slotTargetDifficulty, float levelTargetDifficulty)
+    {
+        if (cd == null)
+            return 1f;
+
+        bool extremeForLevel = levelTargetDifficulty <= 5.5f && cd.difficultyRating >= 8;
+        bool extremeForSlot = cd.difficultyRating >= slotTargetDifficulty + 3f;
+
+        return extremeForLevel || extremeForSlot ? 0.35f : 1f;
     }
 
     private List<GameObject> GetCandidates(
