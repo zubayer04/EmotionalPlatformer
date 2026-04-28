@@ -397,7 +397,11 @@ public class LevelGenerator : MonoBehaviour
             slotRecord.replacementAttempted = spawnResult.replacementAttempted;
             slotRecord.replacementSucceeded = spawnResult.replacementSucceeded;
             slotRecord.replacementMode = spawnResult.replacementMode;
+            slotRecord.replacementReason = spawnResult.replacementReason;
+            slotRecord.generatedRejectionReason = spawnResult.generatedRejectionReason;
             slotRecord.generatedBlueprintName = spawnResult.generatedBlueprintName;
+            slotRecord.generatedBlueprintRows = spawnResult.generatedBlueprintRows;
+            PopulateGeneratedBlueprintFeatureRecord(slotRecord, spawnResult.generatedBlueprintFeatures);
 
             GameObject chunk = spawnResult.chunk;
             if (chunk == null)
@@ -452,12 +456,24 @@ public class LevelGenerator : MonoBehaviour
                 replacementAttempted = false,
                 replacementSucceeded = false,
                 replacementMode = "none",
+                replacementReason = "none",
+                generatedRejectionReason = "none",
                 generatedBlueprintName = string.Empty
             };
         }
 
         string generatedBlueprintName;
-        GameObject generatedChunk = TryBuildGeneratedChunkFromPrefab(prefab, cd, out generatedBlueprintName);
+        string generatedBlueprintRows;
+        ChunkBlueprintFeatures generatedBlueprintFeatures;
+        string generatedRejectionReason;
+        string replacementReason = GetGeneratedReplacementReason(cd);
+        GameObject generatedChunk = TryBuildGeneratedChunkFromPrefab(
+            prefab,
+            cd,
+            out generatedBlueprintName,
+            out generatedBlueprintRows,
+            out generatedBlueprintFeatures,
+            out generatedRejectionReason);
 
         if (generatedChunk != null)
         {
@@ -467,7 +483,11 @@ public class LevelGenerator : MonoBehaviour
                 replacementAttempted = true,
                 replacementSucceeded = true,
                 replacementMode = "generated_success",
-                generatedBlueprintName = generatedBlueprintName
+                replacementReason = replacementReason,
+                generatedRejectionReason = generatedRejectionReason,
+                generatedBlueprintName = generatedBlueprintName,
+                generatedBlueprintRows = generatedBlueprintRows,
+                generatedBlueprintFeatures = generatedBlueprintFeatures
             };
         }
 
@@ -478,8 +498,20 @@ public class LevelGenerator : MonoBehaviour
             replacementAttempted = true,
             replacementSucceeded = false,
             replacementMode = "generated_fallback",
-            generatedBlueprintName = generatedBlueprintName
+            replacementReason = replacementReason,
+            generatedRejectionReason = generatedRejectionReason,
+            generatedBlueprintName = generatedBlueprintName,
+            generatedBlueprintRows = generatedBlueprintRows,
+            generatedBlueprintFeatures = generatedBlueprintFeatures
         };
+    }
+
+    private string GetGeneratedReplacementReason(ChunkData cd)
+    {
+        if (cd == null)
+            return "unknown_generated_replacement";
+
+        return $"random_eligible_{cd.primaryTag.ToString().ToLowerInvariant()}_replacement";
     }
 
     private bool ShouldUseGeneratedChunk(ChunkData cd, int slotIndex)
@@ -516,9 +548,18 @@ public class LevelGenerator : MonoBehaviour
         }
     }
 
-    private GameObject TryBuildGeneratedChunkFromPrefab(GameObject prefab, ChunkData cd, out string generatedBlueprintName)
+    private GameObject TryBuildGeneratedChunkFromPrefab(
+        GameObject prefab,
+        ChunkData cd,
+        out string generatedBlueprintName,
+        out string generatedBlueprintRows,
+        out ChunkBlueprintFeatures generatedBlueprintFeatures,
+        out string generatedRejectionReason)
     {
         generatedBlueprintName = string.Empty;
+        generatedBlueprintRows = string.Empty;
+        generatedBlueprintFeatures = null;
+        generatedRejectionReason = "not_attempted";
 
         if (cd == null) return null;
 
@@ -528,17 +569,27 @@ public class LevelGenerator : MonoBehaviour
             targetDifficulty = cd.difficultyRating,
             requireHazard = cd.hasHazard,
             preferredWidth = GetPreferredWidthForTag(cd),
-            preferredHeight = GetPreferredHeightForTag(cd)
+            preferredHeight = GetPreferredHeightForTag(cd),
+            hasSourceContext = true,
+            sourceChunkName = prefab != null ? prefab.name : string.Empty,
+            sourceDifficulty = cd.difficultyRating,
+            sourceHasHazard = cd.hasHazard,
+            sourceEstimatedJumps = cd.estimatedJumps,
+            sourceExitDelta = cd.exitDelta,
+            sourceMaxGapWidth = ChunkBlueprintFeatureExtractor.EstimateSourceMaxGapWidth(prefab)
         };
 
         ChunkBlueprint blueprint = SimpleChunkBlueprintGenerator.Generate(request);
         if (blueprint == null)
         {
             Debug.LogWarning($"LevelGenerator: Generator returned null for '{prefab.name}'.");
+            generatedRejectionReason = "generator_returned_null";
             return null;
         }
 
         generatedBlueprintName = blueprint.chunkName;
+        generatedBlueprintRows = ChunkBlueprintFeatureExtractor.RowsToInlineText(blueprint);
+        generatedBlueprintFeatures = ChunkBlueprintFeatureExtractor.Analyze(blueprint);
 
         ChunkBlueprintValidationResult validation = ChunkBlueprintValidator.Validate(blueprint);
         if (!validation.isValid)
@@ -548,6 +599,13 @@ public class LevelGenerator : MonoBehaviour
             {
                 Debug.LogWarning($"  Error {i + 1}: {validation.errors[i]}");
             }
+            generatedRejectionReason = "validation_failed";
+            return null;
+        }
+
+        if (!IsGeneratedReplacementAcceptable(cd, request, blueprint, generatedBlueprintFeatures, out generatedRejectionReason))
+        {
+            Debug.LogWarning($"LevelGenerator: Generated blueprint rejected for '{prefab.name}': {generatedRejectionReason}");
             return null;
         }
 
@@ -555,10 +613,142 @@ public class LevelGenerator : MonoBehaviour
         if (built == null)
         {
             Debug.LogWarning($"LevelGenerator: Runtime builder failed for '{prefab.name}'.");
+            generatedRejectionReason = "runtime_builder_failed";
             return null;
         }
 
+        generatedRejectionReason = "accepted";
         return built;
+    }
+
+    private bool IsGeneratedReplacementAcceptable(
+        ChunkData source,
+        ChunkGenerationRequest request,
+        ChunkBlueprint generated,
+        ChunkBlueprintFeatures features,
+        out string rejectionReason)
+    {
+        rejectionReason = "accepted";
+
+        if (source == null || generated == null || features == null)
+        {
+            rejectionReason = "missing_source_or_generated_data";
+            return false;
+        }
+
+        if (generated.primaryTag != source.primaryTag)
+        {
+            rejectionReason = $"primary_tag_mismatch:{source.primaryTag}->{generated.primaryTag}";
+            return false;
+        }
+
+        if (generated.hasHazard != source.hasHazard)
+        {
+            rejectionReason = $"hazard_mismatch:{source.hasHazard}->{generated.hasHazard}";
+            return false;
+        }
+
+        int difficultyDelta = generated.difficultyRating - source.difficultyRating;
+        if (Mathf.Abs(difficultyDelta) > 0 && !IsGeneratedSafeRestDifficultyEquivalent(source, generated))
+        {
+            rejectionReason = $"difficulty_delta:{difficultyDelta:+#;-#;0}";
+            return false;
+        }
+
+        int jumpsDelta = generated.estimatedJumps - source.estimatedJumps;
+        if (Mathf.Abs(jumpsDelta) > 1)
+        {
+            rejectionReason = $"jump_delta:{jumpsDelta:+#;-#;0}";
+            return false;
+        }
+
+        if (request != null && request.sourceMaxGapWidth > 0 && generated.primaryTag == ChunkTag.Gap)
+        {
+            int gapDelta = features.maxGapWidth - request.sourceMaxGapWidth;
+            if (gapDelta != 0)
+            {
+                rejectionReason = $"max_gap_delta:{gapDelta:+#;-#;0}";
+                return false;
+            }
+        }
+
+        Vector2 exitDeltaDiff = features.estimatedExitDelta - source.exitDelta;
+        const float horizontalExitDeltaTolerance = 1.25f;
+        float verticalExitDeltaTolerance = Mathf.Max(
+            GetGeneratedGapVerticalExitDeltaTolerance(request, generated),
+            Mathf.Max(
+                GetGeneratedSafeVerticalExitDeltaTolerance(request, generated),
+                GetGeneratedPrecisionVerticalExitDeltaTolerance(request, generated)));
+        if (Mathf.Abs(exitDeltaDiff.x) > horizontalExitDeltaTolerance || Mathf.Abs(exitDeltaDiff.y) > verticalExitDeltaTolerance)
+        {
+            rejectionReason = $"exit_delta_mismatch:({exitDeltaDiff.x:+0.##;-0.##;0},{exitDeltaDiff.y:+0.##;-0.##;0})";
+            return false;
+        }
+
+        return true;
+    }
+
+    private float GetGeneratedGapVerticalExitDeltaTolerance(ChunkGenerationRequest request, ChunkBlueprint generated)
+    {
+        if (request != null &&
+            generated != null &&
+            generated.primaryTag == ChunkTag.Gap &&
+            request.sourceMaxGapWidth > 0 &&
+            request.sourceMaxGapWidth <= 4)
+        {
+            return 2.25f;
+        }
+
+        return 1.25f;
+    }
+
+    private bool IsGeneratedSafeRestDifficultyEquivalent(ChunkData source, ChunkBlueprint generated)
+    {
+        if (source == null || generated == null)
+            return false;
+
+        bool controlledRiseVariant =
+            generated.chunkName == "Generated_Safe_RiseRest_Box2" ||
+            generated.chunkName == "Generated_Safe_RiseRest_Box3";
+
+        return controlledRiseVariant &&
+               source.primaryTag == ChunkTag.Safe &&
+               generated.primaryTag == ChunkTag.Safe &&
+               !source.hasHazard &&
+               source.estimatedJumps == 0 &&
+               generated.difficultyRating == source.difficultyRating + 1;
+    }
+
+    private float GetGeneratedSafeVerticalExitDeltaTolerance(ChunkGenerationRequest request, ChunkBlueprint generated)
+    {
+        if (request != null &&
+            generated != null &&
+            generated.primaryTag == ChunkTag.Safe &&
+            generated.chunkName.StartsWith("Generated_Safe_") &&
+            request.hasSourceContext &&
+            request.sourceEstimatedJumps == 0 &&
+            !request.sourceHasHazard)
+        {
+            return 4.25f;
+        }
+
+        return 1.25f;
+    }
+
+    private float GetGeneratedPrecisionVerticalExitDeltaTolerance(ChunkGenerationRequest request, ChunkBlueprint generated)
+    {
+        if (request != null &&
+            generated != null &&
+            generated.primaryTag == ChunkTag.Precision &&
+            generated.chunkName.StartsWith("Generated_Precision_ElevatedPlatform_") &&
+            request.hasSourceContext &&
+            request.sourceEstimatedJumps == 2 &&
+            !request.sourceHasHazard)
+        {
+            return 2.25f;
+        }
+
+        return 1.25f;
     }
 
     private LevelRunLog.SlotRecord CreateSelectedSlotRecord(GameObject prefab, int sequenceIndex, int generatedSlotIndex, bool isStartingChunk)
@@ -568,7 +758,9 @@ public class LevelGenerator : MonoBehaviour
             sequenceIndex = sequenceIndex,
             generatedSlotIndex = generatedSlotIndex,
             isStartingChunk = isStartingChunk,
-            replacementMode = "none"
+            replacementMode = "none",
+            replacementReason = "none",
+            generatedRejectionReason = "none"
         };
 
         if (!isStartingChunk && generatedSlotIndex >= 0)
@@ -614,6 +806,22 @@ public class LevelGenerator : MonoBehaviour
         slotRecord.spawnedHasHazard = spawnedData.hasHazard;
         slotRecord.spawnedEstimatedJumps = spawnedData.estimatedJumps;
         slotRecord.spawnedExitDelta = spawnedData.exitDelta;
+    }
+
+    private void PopulateGeneratedBlueprintFeatureRecord(LevelRunLog.SlotRecord slotRecord, ChunkBlueprintFeatures features)
+    {
+        if (slotRecord == null || features == null)
+            return;
+
+        slotRecord.generatedBlueprintFeatureSummary = features.ToSummary();
+        slotRecord.generatedBlueprintWidth = features.width;
+        slotRecord.generatedBlueprintHeight = features.height;
+        slotRecord.generatedBlueprintGapCount = features.gapCount;
+        slotRecord.generatedBlueprintMaxGapWidth = features.maxGapWidth;
+        slotRecord.generatedBlueprintMinLandingWidth = features.minLandingWidth;
+        slotRecord.generatedBlueprintSolidCount = features.solidCount;
+        slotRecord.generatedBlueprintHazardCount = features.hazardCount;
+        slotRecord.generatedBlueprintEstimatedExitDelta = features.estimatedExitDelta;
     }
 
     private float GetSlotTargetDifficultyForGeneratedSlotIndex(int generatedSlotIndex)
@@ -1180,6 +1388,10 @@ public class LevelGenerator : MonoBehaviour
         public bool replacementAttempted;
         public bool replacementSucceeded;
         public string replacementMode;
+        public string replacementReason;
+        public string generatedRejectionReason;
         public string generatedBlueprintName;
+        public string generatedBlueprintRows;
+        public ChunkBlueprintFeatures generatedBlueprintFeatures;
     }
 }

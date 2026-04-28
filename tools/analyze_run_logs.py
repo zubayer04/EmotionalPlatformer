@@ -168,6 +168,8 @@ def slot_rows_for_table(slots: Iterable[dict[str, Any]]) -> list[list[str]]:
                 fmt_num(slot.get("spawnedDifficulty"), 0),
                 fmt_num(delta),
                 slot.get("replacementMode", "-") or "-",
+                slot.get("replacementReason", "-") or "-",
+                slot.get("generatedRejectionReason", "-") or "-",
                 str(slot.get("deathsAttributedToSlot", 0)),
             ]
         )
@@ -206,6 +208,8 @@ def print_latest_slot_table(run: dict[str, Any]) -> None:
         "spnDiff",
         "delta",
         "replace",
+        "reason",
+        "accept/reject",
         "deaths",
     ]
     print_table(headers, slot_rows_for_table(slots))
@@ -233,7 +237,9 @@ def selected_vs_spawned_mismatches(slots: Iterable[dict[str, Any]]) -> list[str]
         if name_changed or diff_changed:
             messages.append(
                 f"slot {slot.get('sequenceIndex')}: {selected_name} ({fmt_num(selected_diff, 0)}) -> "
-                f"{spawned_name} ({fmt_num(spawned_diff, 0)}) [{slot.get('replacementMode', '-')}]"
+                f"{spawned_name} ({fmt_num(spawned_diff, 0)}) "
+                f"[{slot.get('replacementMode', '-')}; {slot.get('replacementReason', '-') or '-'}; "
+                f"{slot.get('generatedRejectionReason', '-') or '-'}]"
             )
     return messages
 
@@ -530,6 +536,10 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
 
     selected_counter: Counter[str] = Counter()
     replaced_counter: Counter[str] = Counter()
+    replacement_reason_counter: Counter[str] = Counter()
+    rejection_reason_counter: Counter[str] = Counter()
+    generated_blueprint_counter: Counter[str] = Counter()
+    generated_rows_counter: Counter[str] = Counter()
     death_slot_counter: Counter[str] = Counter()
     death_chunk_counter: Counter[str] = Counter()
     adaptation_counter: Counter[str] = Counter()
@@ -541,6 +551,10 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
             selected_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
             if slot.get("replacementMode") and slot.get("replacementMode") != "none":
                 replaced_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
+                replacement_reason_counter[slot.get("replacementReason", "unknown") or "unknown"] += 1
+                rejection_reason_counter[slot.get("generatedRejectionReason", "unknown") or "unknown"] += 1
+                generated_blueprint_counter[slot.get("generatedBlueprintName", "unknown") or "unknown"] += 1
+                generated_rows_counter[slot.get("generatedBlueprintRows", "unknown") or "unknown"] += 1
             slot_deaths = int(slot.get("deathsAttributedToSlot", 0) or 0)
             if slot_deaths > 0:
                 death_slot_counter[f"slot {slot.get('sequenceIndex')}: {effective_chunk_name(slot)}"] += slot_deaths
@@ -550,6 +564,10 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
 
     print_top_counter("Most selected chunks", selected_counter, 5)
     print_top_counter("Most replaced selected chunks", replaced_counter, 5)
+    print_top_counter("Replacement reasons", replacement_reason_counter, 5)
+    print_top_counter("Generated acceptance/rejection reasons", rejection_reason_counter, 5)
+    print_top_counter("Generated blueprint names", generated_blueprint_counter, 5)
+    print_top_counter("Generated blueprint layouts", generated_rows_counter, 5)
     print_top_counter("Death-heavy slots", death_slot_counter, 5)
     print_top_counter("Death-heavy chunks", death_chunk_counter, 5)
     print_top_counter("Adaptation decisions", adaptation_counter, 5)

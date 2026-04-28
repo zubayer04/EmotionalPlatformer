@@ -12,6 +12,8 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
     [Header("Sprite References")]
     [SerializeField] private Sprite solidSprite;
+    [SerializeField] private Sprite boxSprite;
+    [SerializeField] private Sprite precisionSprite;
     [SerializeField] private Sprite spikeSprite;
 
     [Header("Debug Input")]
@@ -61,6 +63,14 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
                 {
                     CreateSolidTile(root.transform, localPos, size);
                 }
+                else if (cell == 'B')
+                {
+                    CreateBoxTile(root.transform, localPos, size);
+                }
+                else if (cell == 'P')
+                {
+                    CreatePrecisionTile(root.transform, localPos, size);
+                }
                 else if (cell == 'S')
                 {
                     CreateSpikeTile(root.transform, localPos, size);
@@ -77,6 +87,10 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
         chunkData.entry = entry;
         chunkData.exit = exit;
+        chunkData.exitDelta = exit != null && entry != null
+            ? (Vector2)(exit.position - entry.position)
+            : Vector2.zero;
+        chunkData.chunkWidth = blueprint.width * cellSize.x;
 
         return root;
     }
@@ -103,7 +117,7 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
     private bool IsSupportCell(char cell)
     {
-        return cell == '#';
+        return cell == '#' || cell == 'B' || cell == 'P';
     }
 
     private Vector3 GetTopLeftOfCell(int x, int y, int totalHeight)
@@ -203,6 +217,52 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
         SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
         sr.sprite = solidSprite != null ? solidSprite : GetDefaultSprite();
+        sr.color = Color.white;
+
+        BoxCollider2D col = go.AddComponent<BoxCollider2D>();
+        col.size = size;
+
+        return go;
+    }
+
+    private GameObject CreateBoxTile(Transform parent, Vector3 localPos, Vector2 size)
+    {
+        GameObject go = new GameObject("BoxSolid");
+        go.transform.SetParent(parent);
+        go.transform.localPosition = localPos;
+        go.transform.localScale = Vector3.one;
+
+        int layerIndex = LayerMask.NameToLayer(solidLayerName);
+        if (layerIndex != -1)
+            go.layer = layerIndex;
+        else
+            Debug.LogWarning($"ChunkBlueprintRuntimeBuilder: Layer '{solidLayerName}' not found.");
+
+        SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+        sr.sprite = boxSprite != null ? boxSprite : (solidSprite != null ? solidSprite : GetDefaultSprite());
+        sr.color = Color.white;
+
+        BoxCollider2D col = go.AddComponent<BoxCollider2D>();
+        col.size = size;
+
+        return go;
+    }
+
+    private GameObject CreatePrecisionTile(Transform parent, Vector3 localPos, Vector2 size)
+    {
+        GameObject go = new GameObject("PrecisionSolid");
+        go.transform.SetParent(parent);
+        go.transform.localPosition = localPos;
+        go.transform.localScale = Vector3.one;
+
+        int layerIndex = LayerMask.NameToLayer(solidLayerName);
+        if (layerIndex != -1)
+            go.layer = layerIndex;
+        else
+            Debug.LogWarning($"ChunkBlueprintRuntimeBuilder: Layer '{solidLayerName}' not found.");
+
+        SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+        sr.sprite = precisionSprite != null ? precisionSprite : (solidSprite != null ? solidSprite : GetDefaultSprite());
         sr.color = Color.white;
 
         BoxCollider2D col = go.AddComponent<BoxCollider2D>();

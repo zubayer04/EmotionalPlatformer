@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 5;
 
     [Serializable]
     public class RunRecord
@@ -68,7 +68,19 @@ public static class LevelRunLog
         public bool replacementAttempted;
         public bool replacementSucceeded;
         public string replacementMode;
+        public string replacementReason;
+        public string generatedRejectionReason;
         public string generatedBlueprintName;
+        public string generatedBlueprintRows;
+        public string generatedBlueprintFeatureSummary;
+        public int generatedBlueprintWidth;
+        public int generatedBlueprintHeight;
+        public int generatedBlueprintGapCount;
+        public int generatedBlueprintMaxGapWidth;
+        public int generatedBlueprintMinLandingWidth;
+        public int generatedBlueprintSolidCount;
+        public int generatedBlueprintHazardCount;
+        public Vector2 generatedBlueprintEstimatedExitDelta;
 
         public int deathsAttributedToSlot;
     }
