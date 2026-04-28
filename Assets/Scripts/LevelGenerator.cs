@@ -531,7 +531,7 @@ public class LevelGenerator : MonoBehaviour
                 return allowGeneratedGap;
 
             case ChunkTag.Precision:
-                return allowGeneratedPrecision;
+                return allowGeneratedPrecision && IsElevatedPlatformPrecisionSource(cd);
 
             case ChunkTag.Vertical:
                 return allowGeneratedVertical;
@@ -546,6 +546,11 @@ public class LevelGenerator : MonoBehaviour
             default:
                 return false;
         }
+    }
+
+    private bool IsElevatedPlatformPrecisionSource(ChunkData cd)
+    {
+        return cd != null && cd.gameObject.name.Contains("Chunk_ElevatedPlatform_Tilemap");
     }
 
     private GameObject TryBuildGeneratedChunkFromPrefab(
