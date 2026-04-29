@@ -32,6 +32,7 @@ public static class AdaptiveDifficultyController
         public int cleanRunStreakBefore;
         public bool hasPreviousSmoothedStrain;
         public float previousSmoothedStrain;
+        public BehaviourSummary behaviour;
     }
 
     public struct Decision
@@ -73,7 +74,8 @@ public static class AdaptiveDifficultyController
             input.deathsPerChunk,
             input.timePerChunk,
             settings.hardDeathsPerChunkThreshold,
-            settings.slowTimePerChunkThreshold);
+            settings.slowTimePerChunkThreshold,
+            input.behaviour);
 
         float smoothing = Mathf.Clamp01(settings.strainSmoothing);
         float smoothedStrain = input.hasPreviousSmoothedStrain
@@ -170,6 +172,12 @@ public static class AdaptiveDifficultyController
 
         newTarget = Mathf.Clamp(newTarget, settings.minTargetDifficulty, settings.maxTargetDifficulty);
 
+        bool hasBehaviourData = HasBehaviourData(input.behaviour);
+        float engagement = input.behaviour.EngagementScore();
+        string behaviourSummary = hasBehaviourData
+            ? $", engagement={engagement:0.00}, hesitation={input.behaviour.hesitationScore:0.00}, momentum={input.behaviour.momentumFluidity:0.00}"
+            : ", behaviour=unavailable";
+
         return new Decision
         {
             targetBefore = targetBefore,
@@ -177,7 +185,7 @@ public static class AdaptiveDifficultyController
             decisionCode = decisionCode,
             decisionText = decisionText,
             evidenceSummary =
-                $"strain={performanceStrain:0.00}, smoothed={smoothedStrain:0.00}, actual-target={actualTargetDelta:+0.00;-0.00;0.00}",
+                $"strain={performanceStrain:0.00}, smoothed={smoothedStrain:0.00}, actual-target={actualTargetDelta:+0.00;-0.00;0.00}" + behaviourSummary,
             performanceStrain = performanceStrain,
             smoothedStrain = smoothedStrain,
             actualTargetDelta = actualTargetDelta,
@@ -198,8 +206,10 @@ public static class AdaptiveDifficultyController
         float deathsPerChunk,
         float timePerChunk,
         float hardDeathsPerChunkThreshold,
-        float slowTimePerChunkThreshold)
+        float slowTimePerChunkThreshold,
+        BehaviourSummary behaviour)
     {
+        // Classic strain signals (death and time pressure)
         float deathPressure = hardDeathsPerChunkThreshold > 0f
             ? deathsPerChunk / hardDeathsPerChunkThreshold
             : (deathsPerChunk > 0f ? 1f : 0f);
@@ -208,6 +218,44 @@ public static class AdaptiveDifficultyController
             ? timePerChunk / slowTimePerChunkThreshold
             : (timePerChunk > 0f ? 1f : 0f);
 
-        return Mathf.Clamp01(Mathf.Max(deathPressure, timePressure));
+        float classicStrain = Mathf.Max(deathPressure, timePressure);
+
+        if (!HasBehaviourData(behaviour))
+            return Mathf.Clamp01(classicStrain);
+
+        // Behavioural strain signals
+        // Hesitation: high hesitation = player is anxious about upcoming challenges
+        float hesitationStrain = Mathf.Clamp01(behaviour.hesitationScore * 1.5f);
+
+        // Low momentum fluidity = player is struggling to move confidently
+        float momentumStrain = Mathf.Clamp01(1f - behaviour.momentumFluidity);
+
+        // High direction reversals = indecision under pressure
+        float reversalStrain = Mathf.Clamp01(behaviour.directionReversalRate / 4f);
+
+        // Slow retry = fatigue/frustration after death
+        float retryStrain = 0f;
+        if (behaviour.avgRetryDelay >= 0f)
+            retryStrain = Mathf.Clamp01(behaviour.avgRetryDelay / 3f);
+
+        // Spread deaths (low clustering) = overwhelm rather than focused challenge
+        float overwhelmStrain = 0f;
+        if (behaviour.deathClusteringRatio > 0f && behaviour.deathClusteringRatio < 0.5f)
+            overwhelmStrain = Mathf.Clamp01((0.5f - behaviour.deathClusteringRatio) * 2f);
+
+        // Weighted combination: classic signals still dominate (60%), behavioural adds nuance (40%)
+        float behaviouralStrain = (hesitationStrain * 0.3f) +
+                                  (momentumStrain * 0.25f) +
+                                  (reversalStrain * 0.15f) +
+                                  (retryStrain * 0.15f) +
+                                  (overwhelmStrain * 0.15f);
+
+        float combined = (classicStrain * 0.6f) + (behaviouralStrain * 0.4f);
+        return Mathf.Clamp01(combined);
+    }
+
+    private static bool HasBehaviourData(BehaviourSummary behaviour)
+    {
+        return behaviour.chunksTraversed > 0 && behaviour.totalTraversalFrames > 0;
     }
 }

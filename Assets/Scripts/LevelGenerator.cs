@@ -59,6 +59,9 @@ public class LevelGenerator : MonoBehaviour
     [Tooltip("If enabled, chunk selection uses previous TWO chunk states plus target difficulty.")]
     public bool useTwoStepMarkov = true;
 
+    [Tooltip("Learnable Markov weight table. Created automatically if null.")]
+    private MarkovWeightTable markovWeightTable;
+
     [Tooltip("Avoid spawning the exact same prefab twice in a row.")]
     public bool avoidSamePrefabBackToBack = true;
 
@@ -1193,7 +1196,7 @@ public class LevelGenerator : MonoBehaviour
 
         float progress = Mathf.Clamp01((slotIndex + 1f) / Mathf.Max(1, totalChunks - 1));
         float slotTargetDifficulty = Mathf.Lerp(startDifficultyBias, targetDifficulty, progress);
-        DifficultyBand band = GetDifficultyBand(targetDifficulty);
+        DifficultyBand band = MarkovWeightTable.GetBandForDifficulty(targetDifficulty);
 
         candidates = ApplyExtremeOutlierEligibility(candidates, slotTargetDifficulty, targetDifficulty, slotIndex);
 
@@ -1211,7 +1214,7 @@ public class LevelGenerator : MonoBehaviour
             }
 
             float transitionWeight = useTwoStepMarkov
-                ? GetTransitionWeight(prev2, prev1, candidate.PrimaryTag, band)
+                ? GetMarkovWeight(prev2, prev1, candidate.PrimaryTag, band)
                 : 1f;
 
             if (transitionWeight <= 0f)
@@ -1481,178 +1484,28 @@ public class LevelGenerator : MonoBehaviour
         return prefabName.Trim();
     }
 
-    private enum DifficultyBand { Low, Medium, High }
-
-    private DifficultyBand GetDifficultyBand(float difficulty)
+    private void EnsureMarkovWeightTable()
     {
-        if (difficulty <= 3.5f) return DifficultyBand.Low;
-        if (difficulty <= 6.5f) return DifficultyBand.Medium;
-        return DifficultyBand.High;
+        if (markovWeightTable != null) return;
+
+        markovWeightTable = new MarkovWeightTable();
+
+        if (markovWeightTable.TryLoad(out string loadMessage))
+            Debug.Log($"LevelGenerator: Loaded learned Markov weights — {loadMessage}");
+        else
+            Debug.Log($"LevelGenerator: Using baseline Markov weights ({loadMessage})");
     }
 
-    private float GetTransitionWeight(ChunkTag prev2, ChunkTag prev1, ChunkTag next, DifficultyBand band)
+    private float GetMarkovWeight(ChunkTag prev2, ChunkTag prev1, ChunkTag next, DifficultyBand band)
     {
-        if (band == DifficultyBand.Low)
-        {
-            if (prev1 == ChunkTag.Spikes)
-            {
-                if (next == ChunkTag.Rest) return 4.0f;
-                if (next == ChunkTag.Safe) return 3.0f;
-                if (next == ChunkTag.Gap) return 1.0f;
-                return 0.1f;
-            }
+        EnsureMarkovWeightTable();
+        return markovWeightTable.GetWeight(prev2, prev1, next, band);
+    }
 
-            if (prev1 == ChunkTag.Precision)
-            {
-                if (next == ChunkTag.Rest) return 4.0f;
-                if (next == ChunkTag.Safe) return 3.0f;
-                if (next == ChunkTag.Gap) return 1.0f;
-                return 0.1f;
-            }
-
-            if (prev1 == ChunkTag.Vertical)
-            {
-                if (next == ChunkTag.Safe) return 3.0f;
-                if (next == ChunkTag.Rest) return 2.5f;
-                if (next == ChunkTag.Gap) return 1.5f;
-                return 0.5f;
-            }
-
-            if (prev1 == ChunkTag.Gap)
-            {
-                if (next == ChunkTag.Safe) return 3.0f;
-                if (next == ChunkTag.Rest) return 2.5f;
-                if (next == ChunkTag.Precision) return 0.75f;
-                return 0.5f;
-            }
-
-            if (prev1 == ChunkTag.Rest || prev1 == ChunkTag.Safe)
-            {
-                if (next == ChunkTag.Safe) return 2.5f;
-                if (next == ChunkTag.Gap) return 2.0f;
-                if (next == ChunkTag.Vertical) return 1.5f;
-                if (next == ChunkTag.Rest) return 1.5f;
-                if (next == ChunkTag.Spikes) return 0.75f;
-                if (next == ChunkTag.Precision) return 0.5f;
-            }
-        }
-
-        if (band == DifficultyBand.Medium)
-        {
-            if (prev1 == ChunkTag.Spikes)
-            {
-                if (next == ChunkTag.Safe) return 3.0f;
-                if (next == ChunkTag.Rest) return 2.5f;
-                if (next == ChunkTag.Gap) return 1.5f;
-                if (next == ChunkTag.Vertical) return 1.0f;
-                return 0.25f;
-            }
-
-            if (prev1 == ChunkTag.Precision)
-            {
-                if (next == ChunkTag.Safe) return 2.5f;
-                if (next == ChunkTag.Rest) return 2.0f;
-                if (next == ChunkTag.Gap) return 1.75f;
-                if (next == ChunkTag.Vertical) return 1.25f;
-                if (next == ChunkTag.Spikes) return 1.0f;
-                return 0.25f;
-            }
-
-            if (prev1 == ChunkTag.Vertical)
-            {
-                if (next == ChunkTag.Safe) return 2.5f;
-                if (next == ChunkTag.Rest) return 2.0f;
-                if (next == ChunkTag.Gap) return 1.75f;
-                if (next == ChunkTag.Precision) return 1.5f;
-                return 0.75f;
-            }
-
-            if (prev1 == ChunkTag.Gap)
-            {
-                if (next == ChunkTag.Safe) return 2.5f;
-                if (next == ChunkTag.Rest) return 2.0f;
-                if (next == ChunkTag.Precision) return 1.75f;
-                if (next == ChunkTag.Vertical) return 1.25f;
-                return 0.75f;
-            }
-
-            if (prev1 == ChunkTag.Rest || prev1 == ChunkTag.Safe)
-            {
-                if (next == ChunkTag.Gap) return 2.2f;
-                if (next == ChunkTag.Safe) return 2.0f;
-                if (next == ChunkTag.Vertical) return 1.75f;
-                if (next == ChunkTag.Spikes) return 1.5f;
-                if (next == ChunkTag.Precision) return 1.2f;
-                if (next == ChunkTag.Rest) return 1.0f;
-            }
-        }
-
-        if (band == DifficultyBand.High)
-        {
-            if (prev2 == ChunkTag.Spikes && prev1 == ChunkTag.Rest)
-            {
-                if (next == ChunkTag.Spikes) return 2.0f;
-                if (next == ChunkTag.Precision) return 1.75f;
-                if (next == ChunkTag.Gap) return 1.5f;
-                if (next == ChunkTag.Safe) return 1.0f;
-                if (next == ChunkTag.Rest) return 0.75f;
-            }
-
-            if (prev2 == ChunkTag.Vertical && prev1 == ChunkTag.Gap)
-            {
-                if (next == ChunkTag.Precision) return 2.0f;
-                if (next == ChunkTag.Spikes) return 1.5f;
-                if (next == ChunkTag.Safe) return 1.0f;
-            }
-
-            if (prev1 == ChunkTag.Spikes)
-            {
-                if (next == ChunkTag.Safe) return 2.0f;
-                if (next == ChunkTag.Rest) return 1.5f;
-                if (next == ChunkTag.Gap) return 1.75f;
-                if (next == ChunkTag.Precision) return 1.5f;
-                if (next == ChunkTag.Vertical) return 1.0f;
-            }
-
-            if (prev1 == ChunkTag.Precision)
-            {
-                if (next == ChunkTag.Safe) return 1.75f;
-                if (next == ChunkTag.Rest) return 1.25f;
-                if (next == ChunkTag.Gap) return 1.75f;
-                if (next == ChunkTag.Vertical) return 1.75f;
-                if (next == ChunkTag.Spikes) return 1.25f;
-            }
-
-            if (prev1 == ChunkTag.Vertical)
-            {
-                if (next == ChunkTag.Gap) return 2.0f;
-                if (next == ChunkTag.Precision) return 1.75f;
-                if (next == ChunkTag.Safe) return 1.5f;
-                if (next == ChunkTag.Rest) return 1.0f;
-                if (next == ChunkTag.Spikes) return 1.25f;
-            }
-
-            if (prev1 == ChunkTag.Gap)
-            {
-                if (next == ChunkTag.Precision) return 2.0f;
-                if (next == ChunkTag.Vertical) return 1.75f;
-                if (next == ChunkTag.Safe) return 1.5f;
-                if (next == ChunkTag.Rest) return 1.0f;
-                if (next == ChunkTag.Spikes) return 1.25f;
-            }
-
-            if (prev1 == ChunkTag.Rest || prev1 == ChunkTag.Safe)
-            {
-                if (next == ChunkTag.Gap) return 2.0f;
-                if (next == ChunkTag.Vertical) return 1.75f;
-                if (next == ChunkTag.Spikes) return 1.75f;
-                if (next == ChunkTag.Precision) return 1.5f;
-                if (next == ChunkTag.Safe) return 1.0f;
-                if (next == ChunkTag.Rest) return 0.75f;
-            }
-        }
-
-        return 1f;
+    public MarkovWeightTable GetWeightTable()
+    {
+        EnsureMarkovWeightTable();
+        return markovWeightTable;
     }
 
     public void ClearLevel()

@@ -315,4 +315,6 @@ public class PlayerController : MonoBehaviour
     }
 
     public int FacingSign => (int)facing;
+    public float MaxSpeed => maxSpeed;
+    public bool IsGrounded => isGrounded;
 }

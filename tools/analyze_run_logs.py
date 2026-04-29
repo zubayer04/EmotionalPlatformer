@@ -98,6 +98,24 @@ def selected_source_name(slot: dict[str, Any]) -> str:
     return slot.get("selectedPrefabName") or "Unknown"
 
 
+def behaviour_field(run: dict[str, Any], field: str) -> Any:
+    adaptation = run.get("adaptation", {}) or {}
+    return adaptation.get(field)
+
+
+def has_behaviour_summary(run: dict[str, Any]) -> bool:
+    adaptation = run.get("adaptation", {}) or {}
+    keys = [
+        "hesitationScore",
+        "momentumFluidity",
+        "directionReversalRate",
+        "avgRetryDelay",
+        "deathClusteringRatio",
+        "engagementScore",
+    ]
+    return any(isinstance(adaptation.get(key), (int, float)) for key in keys)
+
+
 def format_summary_line(run: dict[str, Any]) -> str:
     adaptation = run.get("adaptation", {}) or {}
     target = run.get("targetDifficultyBeforeRun")
@@ -165,6 +183,27 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
         print(
             f"Controller: {adaptation.get('controllerName', '-') or '-'} | "
             f"{adaptation.get('evidenceSummary', '-') or '-'}"
+        )
+    if has_behaviour_summary(run):
+        print(
+            "Behaviour: "
+            f"engagement={fmt_num(adaptation.get('engagementScore'))} | "
+            f"hesitation={fmt_num(adaptation.get('hesitationScore'))} | "
+            f"momentum={fmt_num(adaptation.get('momentumFluidity'))} | "
+            f"reversals/s={fmt_num(adaptation.get('directionReversalRate'))} | "
+            f"retryDelay={fmt_num(adaptation.get('avgRetryDelay'))} | "
+            f"deathCluster={fmt_num(adaptation.get('deathClusteringRatio'))} | "
+            f"chunks={adaptation.get('behaviourChunksTraversed', '-')} | "
+            f"frames={adaptation.get('behaviourTraversalFrames', '-')}"
+        )
+    if "markovLearningApplied" in adaptation:
+        print(
+            "Markov Learning: "
+            f"applied={adaptation.get('markovLearningApplied')} | "
+            f"quality={fmt_num(adaptation.get('markovLearningQuality'))} | "
+            f"capped={adaptation.get('markovPositiveReinforcementCapped')} | "
+            f"delivered-target={fmt_num(adaptation.get('markovDeliveredTargetDelta'))} | "
+            f"transitions={adaptation.get('markovTransitionsUpdated', '-')}"
         )
 
 
@@ -575,6 +614,24 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     avg_deaths_per_chunk = average(run.get("deathsPerChunk") for run in runs)
     avg_time_per_chunk = average(run.get("timePerChunk") for run in runs)
     avg_transition_pressure = average(run.get("transitionPressureScore") for run in runs)
+    avg_engagement = average(behaviour_field(run, "engagementScore") for run in runs)
+    avg_hesitation = average(behaviour_field(run, "hesitationScore") for run in runs)
+    avg_momentum = average(behaviour_field(run, "momentumFluidity") for run in runs)
+    avg_reversal_rate = average(behaviour_field(run, "directionReversalRate") for run in runs)
+    avg_retry_delay = average(
+        value
+        for run in runs
+        for value in [behaviour_field(run, "avgRetryDelay")]
+        if isinstance(value, (int, float)) and value >= 0
+    )
+    avg_death_cluster = average(behaviour_field(run, "deathClusteringRatio") for run in runs)
+    avg_markov_quality = average(behaviour_field(run, "markovLearningQuality") for run in runs)
+    markov_applied_count = sum(1 for run in runs if behaviour_field(run, "markovLearningApplied") is True)
+    markov_capped_count = sum(1 for run in runs if behaviour_field(run, "markovPositiveReinforcementCapped") is True)
+    markov_transition_updates = sum(
+        int(behaviour_field(run, "markovTransitionsUpdated") or 0)
+        for run in runs
+    )
     total_pressure_count = sum(int(run.get("transitionPressureCount", 0) or 0) for run in runs)
     total_high_pressure_count = sum(int(run.get("highPressureTransitionCount", 0) or 0) for run in runs)
 
@@ -590,6 +647,17 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         f"Transition pressure: total={total_pressure_count} | "
         f"high={total_high_pressure_count} | "
         f"avg score/run={fmt_num(avg_transition_pressure)}"
+    )
+    print(
+        f"Behavioural signals: engagement={fmt_num(avg_engagement)} | "
+        f"hesitation={fmt_num(avg_hesitation)} | momentum={fmt_num(avg_momentum)} | "
+        f"reversals/s={fmt_num(avg_reversal_rate)} | retryDelay={fmt_num(avg_retry_delay)} | "
+        f"deathCluster={fmt_num(avg_death_cluster)}"
+    )
+    print(
+        f"Markov learning: applied={markov_applied_count}/{run_count} | "
+        f"positive caps={markov_capped_count} | avg quality={fmt_num(avg_markov_quality)} | "
+        f"transition updates={markov_transition_updates}"
     )
 
     selected_counter: Counter[str] = Counter()

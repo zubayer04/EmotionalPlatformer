@@ -24,10 +24,27 @@ public class LevelManager : MonoBehaviour
         public float timeOfDeath;
     }
 
+    private struct MarkovLearningAudit
+    {
+        public bool markovLearningApplied;
+        public bool markovPositiveReinforcementCapped;
+        public float markovLearningQuality;
+        public float markovDeliveredTargetDelta;
+        public int markovTransitionsUpdated;
+    }
+
     [Header("References")]
     [SerializeField] private LevelGenerator levelGenerator;
     [SerializeField] private Transform playerSpawnPoint;
     [SerializeField] private GameObject player;
+    [SerializeField] private PlayerBehaviourTracker behaviourTracker;
+
+    [Header("Markov Learning")]
+    [Tooltip("How much each transition quality score nudges the learned weight.")]
+    [Range(0f, 0.5f)] [SerializeField] private float markovLearningRate = 0.05f;
+
+    [Tooltip("How much learned weights decay toward baseline after each level (prevents drift).")]
+    [Range(0f, 0.2f)] [SerializeField] private float markovDecayRate = 0.02f;
 
     [Header("KillZone")]
     [Tooltip("Assign your KillZone object here (the one with BoxCollider2D + KillZone.cs). If left empty, we'll try to find it.")]
@@ -143,6 +160,8 @@ public class LevelManager : MonoBehaviour
             if (kz != null) killZoneTransform = kz.transform;
         }
 
+        EnsureBehaviourTracker();
+
         GenerateFreshLevel();
     }
 
@@ -151,6 +170,7 @@ public class LevelManager : MonoBehaviour
         if (!waitingForNextLevelChoice)
         {
             levelTimer += Time.deltaTime;
+            ObserveBehaviourChunk();
         }
 
         if (waitingForNextLevelChoice)
@@ -208,6 +228,12 @@ public class LevelManager : MonoBehaviour
             levelGenerator.RecordDeathForChunk(chunk, source, levelTimer);
         }
 
+        if (behaviourTracker != null)
+        {
+            string chunkName = chunk != null ? CleanChunkName(chunk.name) : "None";
+            behaviourTracker.OnPlayerDied(chunkName);
+        }
+
         Debug.Log(
             chunk != null
                 ? $"PLAYER DIED | source={source} | chunk={CleanChunkName(chunk.name)} | tag={chunk.primaryTag} | diff={chunk.difficultyRating} | levelTime={levelTimer:F2}s"
@@ -238,6 +264,13 @@ public class LevelManager : MonoBehaviour
 
         if (!currentGeneratedLevelAlreadyLogged)
         {
+            if (behaviourTracker != null)
+                behaviourTracker.StopTracking();
+
+            BehaviourSummary behaviourSummary = behaviourTracker != null
+                ? behaviourTracker.GetSummary()
+                : BehaviourSummary.Empty;
+
             lastDeathsPerChunk = deathsPerChunk;
             lastTimePerChunk = timePerChunk;
             lastTargetBeforeAdapt = levelGenerator.targetDifficulty;
@@ -245,7 +278,8 @@ public class LevelManager : MonoBehaviour
 
             if (adaptiveDifficultyEnabled)
             {
-                adaptationRecord = UpdateTargetDifficulty(deathsPerChunk, timePerChunk);
+                adaptationRecord = UpdateTargetDifficulty(deathsPerChunk, timePerChunk, behaviourSummary);
+                ApplyMarkovLearningAudit(adaptationRecord, UpdateMarkovWeights(behaviourSummary));
             }
             else
             {
@@ -253,6 +287,15 @@ public class LevelManager : MonoBehaviour
                 lastAdaptationDecision = "Adaptive OFF";
                 adaptationRecord = CreateAdaptiveOffRecord(deathsPerChunk, timePerChunk);
             }
+
+            adaptationRecord.hesitationScore = behaviourSummary.hesitationScore;
+            adaptationRecord.momentumFluidity = behaviourSummary.momentumFluidity;
+            adaptationRecord.directionReversalRate = behaviourSummary.directionReversalRate;
+            adaptationRecord.avgRetryDelay = behaviourSummary.avgRetryDelay;
+            adaptationRecord.deathClusteringRatio = behaviourSummary.deathClusteringRatio;
+            adaptationRecord.engagementScore = behaviourSummary.EngagementScore();
+            adaptationRecord.behaviourChunksTraversed = behaviourSummary.chunksTraversed;
+            adaptationRecord.behaviourTraversalFrames = behaviourSummary.totalTraversalFrames;
 
             FinalizeAndWriteCurrentRunLog(deathsPerChunk, timePerChunk, adaptationRecord);
 
@@ -295,6 +338,9 @@ public class LevelManager : MonoBehaviour
 
         ResetStats();
         RespawnPlayer(resetVelocity: true);
+
+        if (behaviourTracker != null)
+            behaviourTracker.StartTracking();
     }
 
     private void ContinueToNextLevel()
@@ -314,9 +360,134 @@ public class LevelManager : MonoBehaviour
 
         ResetStats();
         RespawnPlayer(resetVelocity: true);
+
+        if (behaviourTracker != null)
+            behaviourTracker.StartTracking();
     }
 
-    private LevelRunLog.AdaptationRecord UpdateTargetDifficulty(float deathsPerChunk, float timePerChunk)
+    private void EnsureBehaviourTracker()
+    {
+        if (behaviourTracker == null)
+            behaviourTracker = FindFirstObjectByType<PlayerBehaviourTracker>();
+
+        if (behaviourTracker == null && player != null)
+            behaviourTracker = player.GetComponent<PlayerBehaviourTracker>();
+
+        if (behaviourTracker == null && player != null)
+            behaviourTracker = player.AddComponent<PlayerBehaviourTracker>();
+
+        if (behaviourTracker == null || player == null)
+            return;
+
+        PlayerController controller = player.GetComponent<PlayerController>();
+        if (controller != null)
+            behaviourTracker.SetPlayer(controller);
+    }
+
+    private void ObserveBehaviourChunk()
+    {
+        if (behaviourTracker == null || levelGenerator == null || player == null)
+            return;
+
+        ChunkData currentChunk = levelGenerator.GetBestChunkForWorldPosition(player.transform.position);
+        behaviourTracker.ObserveCurrentChunk(currentChunk);
+    }
+
+    private MarkovLearningAudit UpdateMarkovWeights(BehaviourSummary behaviour)
+    {
+        MarkovLearningAudit audit = new MarkovLearningAudit();
+
+        if (levelGenerator == null) return audit;
+
+        if (behaviour.chunksTraversed <= 0 || behaviour.totalTraversalFrames <= 0)
+        {
+            Debug.LogWarning("LevelManager: Skipping Markov learning because no behavioural traversal data was recorded.");
+            return audit;
+        }
+
+        MarkovWeightTable table = levelGenerator.GetWeightTable();
+        if (table == null) return audit;
+
+        LevelRunLog.RunRecord runRecord = levelGenerator.CurrentRunLog;
+        if (runRecord == null || runRecord.slots == null || runRecord.slots.Count < 2)
+            return audit;
+
+        float engagementScore = behaviour.EngagementScore();
+
+        // Quality score: centered around 0.5 engagement = neutral
+        // High engagement -> positive (reinforce transition), low -> negative (weaken)
+        float qualityBase = (engagementScore - 0.5f) * 2f;
+
+        float deliveredTargetDelta = completedActualDifficulty - lastTargetBeforeAdapt;
+        bool deliveredContentOvershotTarget = deliveredTargetDelta > actualDifficultyOvershootTolerance;
+        audit.markovDeliveredTargetDelta = deliveredTargetDelta;
+        audit.markovPositiveReinforcementCapped = deliveredContentOvershotTarget && qualityBase > 0f;
+
+        if (deliveredContentOvershotTarget && qualityBase > 0f)
+        {
+            // A clean, fluent run should not reinforce transitions if the generated
+            // content itself was already above the intended target difficulty.
+            qualityBase = 0f;
+        }
+
+        // Modulate by death clustering — spread deaths (overwhelm) penalize more
+        if (behaviour.deathClusteringRatio < 0.5f && behaviour.deathClusteringRatio > 0f)
+            qualityBase -= 0.3f;
+
+        audit.markovLearningApplied = true;
+        audit.markovLearningQuality = qualityBase;
+
+        DifficultyBand band = MarkovWeightTable.GetBandForDifficulty(levelGenerator.targetDifficulty);
+
+        ChunkTag prev2 = ChunkTag.Rest;
+        ChunkTag prev1 = ChunkTag.Rest;
+
+        for (int i = 0; i < runRecord.slots.Count; i++)
+        {
+            LevelRunLog.SlotRecord slot = runRecord.slots[i];
+            if (slot == null) continue;
+
+            if (!System.Enum.TryParse(slot.spawnedPrimaryTag ?? slot.selectedPrimaryTag, out ChunkTag currentTag))
+                continue;
+
+            if (i >= 1)
+            {
+                // Per-slot quality adjustment: penalize slots that had deaths
+                float slotQuality = qualityBase;
+                if (slot.deathsAttributedToSlot > 0)
+                    slotQuality -= 0.2f * Mathf.Min(slot.deathsAttributedToSlot, 3);
+
+                table.UpdateWeight(prev2, prev1, currentTag, band, slotQuality, markovLearningRate);
+                audit.markovTransitionsUpdated++;
+            }
+
+            prev2 = prev1;
+            prev1 = currentTag;
+        }
+
+        table.DecayTowardBaseline(markovDecayRate);
+
+        if (table.TrySave(out string saveMessage))
+            Debug.Log($"LevelManager: Saved learned Markov weights — {saveMessage}");
+        else
+            Debug.LogWarning($"LevelManager: Failed to save Markov weights — {saveMessage}");
+
+        return audit;
+    }
+
+    private void ApplyMarkovLearningAudit(LevelRunLog.AdaptationRecord record, MarkovLearningAudit audit)
+    {
+        if (record == null)
+            return;
+
+        record.markovLearningApplied = audit.markovLearningApplied;
+        record.markovPositiveReinforcementCapped = audit.markovPositiveReinforcementCapped;
+        record.markovLearningQuality = audit.markovLearningQuality;
+        record.markovDeliveredTargetDelta = audit.markovDeliveredTargetDelta;
+        record.markovTransitionsUpdated = audit.markovTransitionsUpdated;
+    }
+
+    private LevelRunLog.AdaptationRecord UpdateTargetDifficulty(float deathsPerChunk, float timePerChunk, BehaviourSummary behaviour)
     {
         AdaptiveDifficultyController.Settings settings = CreateAdaptationSettings();
         AdaptiveDifficultyController.Decision decision = AdaptiveDifficultyController.Evaluate(
@@ -330,7 +501,8 @@ public class LevelManager : MonoBehaviour
                 timePerChunk = timePerChunk,
                 cleanRunStreakBefore = cleanRunStreak,
                 hasPreviousSmoothedStrain = hasRecentStrainScore,
-                previousSmoothedStrain = recentStrainScore
+                previousSmoothedStrain = recentStrainScore,
+                behaviour = behaviour
             });
 
         levelGenerator.targetDifficulty = decision.targetAfter;
