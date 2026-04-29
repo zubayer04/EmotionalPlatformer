@@ -157,6 +157,7 @@ public class PlayerController : MonoBehaviour
 
             rb.gravityScale = 0f;
             rb.linearVelocity = dashDir * dashSpeed;
+            UpdateAnimator();
             return;
         }
 
@@ -176,6 +177,7 @@ public class PlayerController : MonoBehaviour
             }
 
             wasGrounded = isGrounded;
+            UpdateAnimator();
             return;
         }
 

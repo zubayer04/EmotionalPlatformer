@@ -61,15 +61,15 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
                 if (cell == '#')
                 {
-                    CreateSolidTile(root.transform, localPos, size);
+                    CreateSolidTile(root.transform, localPos, size, false);
                 }
                 else if (cell == 'B')
                 {
-                    CreateBoxTile(root.transform, localPos, size);
+                    CreateBoxTile(root.transform, localPos, size, false);
                 }
                 else if (cell == 'P')
                 {
-                    CreatePrecisionTile(root.transform, localPos, size);
+                    CreatePrecisionTile(root.transform, localPos, size, false);
                 }
                 else if (cell == 'S')
                 {
@@ -81,6 +81,8 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
                 }
             }
         }
+
+        CreateMergedSolidColliders(root.transform, blueprint);
 
         Transform entry = CreateEntryMarker(root.transform, blueprint);
         Transform exit = CreateExitMarker(root.transform, blueprint);
@@ -202,73 +204,124 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
         return marker.transform;
     }
 
-    private GameObject CreateSolidTile(Transform parent, Vector3 localPos, Vector2 size)
+    private GameObject CreateSolidTile(Transform parent, Vector3 localPos, Vector2 size, bool addCollider = true)
     {
         GameObject go = new GameObject("Solid");
         go.transform.SetParent(parent);
         go.transform.localPosition = localPos;
         go.transform.localScale = Vector3.one;
 
-        int layerIndex = LayerMask.NameToLayer(solidLayerName);
-        if (layerIndex != -1)
-            go.layer = layerIndex;
-        else
-            Debug.LogWarning($"ChunkBlueprintRuntimeBuilder: Layer '{solidLayerName}' not found.");
+        ApplySolidLayer(go);
 
         SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
         sr.sprite = solidSprite != null ? solidSprite : GetDefaultSprite();
         sr.color = Color.white;
 
-        BoxCollider2D col = go.AddComponent<BoxCollider2D>();
-        col.size = size;
+        if (addCollider)
+        {
+            BoxCollider2D col = go.AddComponent<BoxCollider2D>();
+            col.size = size;
+        }
 
         return go;
     }
 
-    private GameObject CreateBoxTile(Transform parent, Vector3 localPos, Vector2 size)
+    private GameObject CreateBoxTile(Transform parent, Vector3 localPos, Vector2 size, bool addCollider = true)
     {
         GameObject go = new GameObject("BoxSolid");
         go.transform.SetParent(parent);
         go.transform.localPosition = localPos;
         go.transform.localScale = Vector3.one;
 
-        int layerIndex = LayerMask.NameToLayer(solidLayerName);
-        if (layerIndex != -1)
-            go.layer = layerIndex;
-        else
-            Debug.LogWarning($"ChunkBlueprintRuntimeBuilder: Layer '{solidLayerName}' not found.");
+        ApplySolidLayer(go);
 
         SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
         sr.sprite = boxSprite != null ? boxSprite : (solidSprite != null ? solidSprite : GetDefaultSprite());
         sr.color = Color.white;
 
-        BoxCollider2D col = go.AddComponent<BoxCollider2D>();
-        col.size = size;
+        if (addCollider)
+        {
+            BoxCollider2D col = go.AddComponent<BoxCollider2D>();
+            col.size = size;
+        }
 
         return go;
     }
 
-    private GameObject CreatePrecisionTile(Transform parent, Vector3 localPos, Vector2 size)
+    private GameObject CreatePrecisionTile(Transform parent, Vector3 localPos, Vector2 size, bool addCollider = true)
     {
         GameObject go = new GameObject("PrecisionSolid");
         go.transform.SetParent(parent);
         go.transform.localPosition = localPos;
         go.transform.localScale = Vector3.one;
 
-        int layerIndex = LayerMask.NameToLayer(solidLayerName);
-        if (layerIndex != -1)
-            go.layer = layerIndex;
-        else
-            Debug.LogWarning($"ChunkBlueprintRuntimeBuilder: Layer '{solidLayerName}' not found.");
+        ApplySolidLayer(go);
 
         SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
         sr.sprite = precisionSprite != null ? precisionSprite : (solidSprite != null ? solidSprite : GetDefaultSprite());
         sr.color = Color.white;
 
-        BoxCollider2D col = go.AddComponent<BoxCollider2D>();
-        col.size = size;
+        if (addCollider)
+        {
+            BoxCollider2D col = go.AddComponent<BoxCollider2D>();
+            col.size = size;
+        }
 
         return go;
+    }
+
+    private void CreateMergedSolidColliders(Transform parent, ChunkBlueprint blueprint)
+    {
+        if (blueprint == null)
+            return;
+
+        for (int y = 0; y < blueprint.height; y++)
+        {
+            int x = 0;
+            while (x < blueprint.width)
+            {
+                if (!IsSupportCell(GetCellSafe(blueprint, x, y)))
+                {
+                    x++;
+                    continue;
+                }
+
+                int startX = x;
+                while (x < blueprint.width && IsSupportCell(GetCellSafe(blueprint, x, y)))
+                    x++;
+
+                int length = x - startX;
+                CreateMergedSolidCollider(parent, startX, y, length, blueprint.height);
+            }
+        }
+    }
+
+    private void CreateMergedSolidCollider(Transform parent, int startX, int y, int length, int totalHeight)
+    {
+        GameObject go = new GameObject("MergedSolidCollider");
+        go.transform.SetParent(parent);
+
+        float centerX = (startX + ((length - 1) * 0.5f)) * cellSize.x;
+        float centerY = (totalHeight - 1 - y) * cellSize.y;
+        go.transform.localPosition = new Vector3(centerX, centerY, 0f);
+        go.transform.localScale = Vector3.one;
+
+        ApplySolidLayer(go);
+
+        BoxCollider2D col = go.AddComponent<BoxCollider2D>();
+        col.size = new Vector2(length * cellSize.x, cellSize.y);
+    }
+
+    private void ApplySolidLayer(GameObject go)
+    {
+        if (go == null)
+            return;
+
+        int layerIndex = LayerMask.NameToLayer(solidLayerName);
+        if (layerIndex != -1)
+            go.layer = layerIndex;
+        else
+            Debug.LogWarning($"ChunkBlueprintRuntimeBuilder: Layer '{solidLayerName}' not found.");
     }
 
     private GameObject CreateSpikeTile(Transform parent, Vector3 localPos, Vector2 size)
