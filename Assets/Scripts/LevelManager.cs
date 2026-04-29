@@ -61,6 +61,16 @@ public class LevelManager : MonoBehaviour
     [Tooltip("Number of clean runs in a row required to force a difficulty increase.")]
     [SerializeField] private int cleanRunStreakThreshold = 3;
 
+    [Header("Evidence-Based Adaptation")]
+    [Tooltip("How far actual delivered difficulty may exceed target before increases are blocked.")]
+    [Range(0f, 3f)] [SerializeField] private float actualDifficultyOvershootTolerance = 1f;
+
+    [Tooltip("How far actual delivered difficulty may sit below target before clean runs are treated as under-challenged.")]
+    [Range(0f, 3f)] [SerializeField] private float actualDifficultyUndershootTolerance = 0.75f;
+
+    [Tooltip("How quickly the adaptation controller reacts to the latest run strain.")]
+    [Range(0f, 1f)] [SerializeField] private float strainSmoothing = 0.55f;
+
     [Header("Testing / Pause After Level")]
     [SerializeField] private bool pauseAfterLevelCompletion = true;
     [SerializeField] private KeyCode continueKey = KeyCode.Return;
@@ -98,6 +108,8 @@ public class LevelManager : MonoBehaviour
 
     // Adaptive memory
     private int cleanRunStreak = 0;
+    private bool hasRecentStrainScore = false;
+    private float recentStrainScore = 0f;
 
     private void Awake()
     {
@@ -306,96 +318,88 @@ public class LevelManager : MonoBehaviour
 
     private LevelRunLog.AdaptationRecord UpdateTargetDifficulty(float deathsPerChunk, float timePerChunk)
     {
-        float targetBefore = levelGenerator.targetDifficulty;
-        float newTarget = targetBefore;
-        int cleanRunStreakBefore = cleanRunStreak;
-
-        bool tooHard =
-            deathsPerChunk > hardDeathsPerChunkThreshold ||
-            timePerChunk > slowTimePerChunkThreshold;
-
-        bool cleanRun =
-            deathsThisLevel == 0 &&
-            timePerChunk < fastTimePerChunkThreshold;
-
-        bool tooEasySingleRun =
-            deathsPerChunk <= easyDeathsPerChunkThreshold &&
-            timePerChunk < fastTimePerChunkThreshold &&
-            levelGenerator.LevelDifficultyScore < levelGenerator.targetDifficulty;
-
-        bool tooEasyByStreak = false;
-        string decisionCode;
-        string decisionText;
-
-        if (tooHard)
-        {
-            cleanRunStreak = 0;
-            newTarget -= targetDifficultyStep;
-            decisionCode = "decrease_too_hard";
-            decisionText = "Too hard -> decrease target";
-        }
-        else
-        {
-            if (cleanRun)
-                cleanRunStreak++;
-            else
-                cleanRunStreak = 0;
-
-            tooEasyByStreak = cleanRunStreak >= cleanRunStreakThreshold;
-
-            if (tooEasySingleRun)
+        AdaptiveDifficultyController.Settings settings = CreateAdaptationSettings();
+        AdaptiveDifficultyController.Decision decision = AdaptiveDifficultyController.Evaluate(
+            new AdaptiveDifficultyController.Input
             {
-                newTarget += targetDifficultyStep;
-                cleanRunStreak = 0;
-                decisionCode = "increase_too_easy";
-                decisionText = "Too easy -> increase target";
-            }
-            else if (tooEasyByStreak)
-            {
-                newTarget += targetDifficultyStep;
-                cleanRunStreak = 0;
-                decisionCode = "increase_clean_streak";
-                decisionText = $"Clean run streak ({cleanRunStreakThreshold}) -> increase target";
-            }
-            else
-            {
-                decisionCode = "keep_about_right";
-                decisionText = "About right -> keep target";
-            }
-        }
+                settings = settings,
+                targetBefore = levelGenerator.targetDifficulty,
+                actualDifficulty = levelGenerator.LevelDifficultyScore,
+                deathsThisLevel = deathsThisLevel,
+                deathsPerChunk = deathsPerChunk,
+                timePerChunk = timePerChunk,
+                cleanRunStreakBefore = cleanRunStreak,
+                hasPreviousSmoothedStrain = hasRecentStrainScore,
+                previousSmoothedStrain = recentStrainScore
+            });
 
-        newTarget = Mathf.Clamp(newTarget, minTargetDifficulty, maxTargetDifficulty);
-        levelGenerator.targetDifficulty = newTarget;
-        lastTargetAfterAdapt = newTarget;
-        lastAdaptationDecision = decisionText;
+        levelGenerator.targetDifficulty = decision.targetAfter;
+        cleanRunStreak = decision.cleanRunStreakAfter;
+        recentStrainScore = decision.smoothedStrain;
+        hasRecentStrainScore = true;
+
+        lastTargetAfterAdapt = decision.targetAfter;
+        lastAdaptationDecision = decision.decisionText;
 
         return new LevelRunLog.AdaptationRecord
         {
             adaptiveEnabled = true,
-            targetBefore = targetBefore,
-            targetAfter = newTarget,
-            decisionCode = decisionCode,
-            decisionText = decisionText,
+            targetBefore = decision.targetBefore,
+            targetAfter = decision.targetAfter,
+            decisionCode = decision.decisionCode,
+            decisionText = decision.decisionText,
             deathsPerChunk = deathsPerChunk,
             timePerChunk = timePerChunk,
             actualDifficulty = levelGenerator.LevelDifficultyScore,
-            cleanRun = cleanRun,
-            tooHard = tooHard,
-            tooEasySingleRun = tooEasySingleRun,
-            tooEasyByStreak = tooEasyByStreak,
-            cleanRunStreakBefore = cleanRunStreakBefore,
-            cleanRunStreakAfter = cleanRunStreak,
+            actualTargetDelta = decision.actualTargetDelta,
+            performanceStrain = decision.performanceStrain,
+            smoothedStrain = decision.smoothedStrain,
+            cleanRun = decision.cleanRun,
+            tooHard = decision.tooHard,
+            tooEasySingleRun = decision.tooEasySingleRun,
+            tooEasyByStreak = decision.tooEasyByStreak,
+            actualDifficultyOvershoot = decision.actualDifficultyOvershoot,
+            actualDifficultyUndershoot = decision.actualDifficultyUndershoot,
+            increaseBlockedByActualOvershoot = decision.increaseBlockedByActualOvershoot,
+            minorErrorGuardApplied = decision.minorErrorGuardApplied,
+            cleanRunStreakBefore = decision.cleanRunStreakBefore,
+            cleanRunStreakAfter = decision.cleanRunStreakAfter,
+            controllerName = "EvidenceBasedController",
+            evidenceSummary = decision.evidenceSummary,
             hardDeathsPerChunkThreshold = hardDeathsPerChunkThreshold,
             slowTimePerChunkThreshold = slowTimePerChunkThreshold,
             easyDeathsPerChunkThreshold = easyDeathsPerChunkThreshold,
             fastTimePerChunkThreshold = fastTimePerChunkThreshold,
             targetDifficultyStep = targetDifficultyStep,
-            cleanRunStreakThreshold = cleanRunStreakThreshold
+            cleanRunStreakThreshold = cleanRunStreakThreshold,
+            actualDifficultyOvershootTolerance = actualDifficultyOvershootTolerance,
+            actualDifficultyUndershootTolerance = actualDifficultyUndershootTolerance,
+            strainSmoothing = strainSmoothing
+        };
+    }
+
+    private AdaptiveDifficultyController.Settings CreateAdaptationSettings()
+    {
+        return new AdaptiveDifficultyController.Settings
+        {
+            minTargetDifficulty = minTargetDifficulty,
+            maxTargetDifficulty = maxTargetDifficulty,
+            targetDifficultyStep = targetDifficultyStep,
+            hardDeathsPerChunkThreshold = hardDeathsPerChunkThreshold,
+            slowTimePerChunkThreshold = slowTimePerChunkThreshold,
+            easyDeathsPerChunkThreshold = easyDeathsPerChunkThreshold,
+            fastTimePerChunkThreshold = fastTimePerChunkThreshold,
+            cleanRunStreakThreshold = cleanRunStreakThreshold,
+            actualDifficultyOvershootTolerance = actualDifficultyOvershootTolerance,
+            actualDifficultyUndershootTolerance = actualDifficultyUndershootTolerance,
+            strainSmoothing = strainSmoothing
         };
     }
 
     private LevelRunLog.AdaptationRecord CreateAdaptiveOffRecord(float deathsPerChunk, float timePerChunk)
     {
+        float actualTargetDelta = levelGenerator.LevelDifficultyScore - lastTargetBeforeAdapt;
+
         return new LevelRunLog.AdaptationRecord
         {
             adaptiveEnabled = false,
@@ -406,18 +410,30 @@ public class LevelManager : MonoBehaviour
             deathsPerChunk = deathsPerChunk,
             timePerChunk = timePerChunk,
             actualDifficulty = levelGenerator.LevelDifficultyScore,
+            actualTargetDelta = actualTargetDelta,
+            performanceStrain = 0f,
+            smoothedStrain = hasRecentStrainScore ? recentStrainScore : 0f,
             cleanRun = deathsThisLevel == 0 && timePerChunk < fastTimePerChunkThreshold,
             tooHard = false,
             tooEasySingleRun = false,
             tooEasyByStreak = false,
+            actualDifficultyOvershoot = actualTargetDelta > actualDifficultyOvershootTolerance,
+            actualDifficultyUndershoot = actualTargetDelta < -actualDifficultyUndershootTolerance,
+            increaseBlockedByActualOvershoot = false,
+            minorErrorGuardApplied = false,
             cleanRunStreakBefore = cleanRunStreak,
             cleanRunStreakAfter = cleanRunStreak,
+            controllerName = "AdaptiveOff",
+            evidenceSummary = "adaptive disabled",
             hardDeathsPerChunkThreshold = hardDeathsPerChunkThreshold,
             slowTimePerChunkThreshold = slowTimePerChunkThreshold,
             easyDeathsPerChunkThreshold = easyDeathsPerChunkThreshold,
             fastTimePerChunkThreshold = fastTimePerChunkThreshold,
             targetDifficultyStep = targetDifficultyStep,
-            cleanRunStreakThreshold = cleanRunStreakThreshold
+            cleanRunStreakThreshold = cleanRunStreakThreshold,
+            actualDifficultyOvershootTolerance = actualDifficultyOvershootTolerance,
+            actualDifficultyUndershootTolerance = actualDifficultyUndershootTolerance,
+            strainSmoothing = strainSmoothing
         };
     }
 
@@ -567,7 +583,7 @@ public class LevelManager : MonoBehaviour
         if (!showHud || levelGenerator == null) return;
 
         const float pad = 10f;
-        Rect r = new Rect(pad, pad, 620f, waitingForNextLevelChoice ? 430f : 350f);
+        Rect r = new Rect(pad, pad, 620f, waitingForNextLevelChoice ? 450f : 370f);
 
         float shownActual = waitingForNextLevelChoice ? completedActualDifficulty : levelGenerator.LevelDifficultyScore;
         float shownDelta = shownActual - levelGenerator.targetDifficulty;
@@ -588,6 +604,7 @@ public class LevelManager : MonoBehaviour
             $"Last Target Before: {lastTargetBeforeAdapt:F2}\n" +
             $"Last Target After: {lastTargetAfterAdapt:F2}\n" +
             $"Last Decision: {lastAdaptationDecision}\n" +
+            $"Recent Strain: {(hasRecentStrainScore ? recentStrainScore : 0f):F2}\n" +
             $"Clean Run Streak: {cleanRunStreak} / {cleanRunStreakThreshold}";
 
         if (waitingForNextLevelChoice)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
@@ -121,7 +122,10 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         sb.AppendLine($"varietyBonus: {generator.varietyBonus:0.##}");
         sb.AppendLine($"earlyHardPenalty: {generator.earlyHardPenalty:0.##}");
         sb.AppendLine($"useGeneratedBlueprintChunks: {generator.useGeneratedBlueprintChunks}");
+        sb.AppendLine($"useGeneratedBlueprintCandidateSelection: {generator.useGeneratedBlueprintCandidateSelection}");
         sb.AppendLine($"generatedChunkReplacementChance: {generator.generatedChunkReplacementChance:0.##}");
+        sb.AppendLine($"generatedCandidateVariantsPerSource: {generator.generatedCandidateVariantsPerSource}");
+        sb.AppendLine($"generatedCandidateFamilyWeight: {generator.generatedCandidateFamilyWeight:0.##}");
         sb.AppendLine($"allowGeneratedGap: {generator.allowGeneratedGap}");
         sb.AppendLine($"allowGeneratedPrecision: {generator.allowGeneratedPrecision}");
         sb.AppendLine($"allowGeneratedVertical: {generator.allowGeneratedVertical}");
@@ -226,7 +230,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             }
 
             ChunkBlueprintValidationResult validation = ChunkBlueprintValidator.Validate(blueprint);
-            BlueprintFeatures features = AnalyzeBlueprintFeatures(blueprint);
+            ChunkBlueprintFeatures features = ChunkBlueprintFeatureExtractor.Analyze(blueprint);
             string validationText = validation.isValid ? "Valid" : "Invalid";
 
             if (!validation.isValid)
@@ -254,8 +258,8 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         List<string> warnings)
     {
         sb.AppendLine("## Potential Replacement Equivalence");
-        sb.AppendLine("Source | SourceTag | SourceDiff | SourceJumps | SourceHazard | SourceExitDelta | Generated | GeneratedDiff | GeneratedJumps | GeneratedHazard | GeneratedWidth | DiffDelta | Status | Reason");
-        sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
+        sb.AppendLine("Source | SourceTag | SourceDiff | SourceJumps | SourceHazard | SourceExitDelta | SourceMaxGap | Generated | GeneratedDiff | GeneratedJumps | GeneratedHazard | GeneratedWidth | GeneratedEstimatedExitDelta | GapCount | MaxGapWidth | LandingWidth | DiffDelta | Status | Reason");
+        sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
         int replacementReviewCount = 0;
 
         if (generator == null)
@@ -280,7 +284,14 @@ public class ChunkCalibrationReporterWindow : EditorWindow
                 targetDifficulty = source.difficultyRating,
                 requireHazard = source.hasHazard,
                 preferredWidth = GetPreferredWidthForTag(source.primaryTag),
-                preferredHeight = GetPreferredHeightForTag(source.primaryTag)
+                preferredHeight = GetPreferredHeightForTag(source.primaryTag),
+                hasSourceContext = true,
+                sourceChunkName = source.name,
+                sourceDifficulty = source.difficultyRating,
+                sourceHasHazard = source.hasHazard,
+                sourceEstimatedJumps = source.estimatedJumps,
+                sourceExitDelta = source.exitDelta,
+                sourceMaxGapWidth = source.maxGapWidth
             };
 
             ChunkBlueprint generated = GenerateDeterministicSample(request, source.difficultyRating + source.name.GetHashCode());
@@ -295,21 +306,30 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             int jumpsDelta = generated.estimatedJumps - source.estimatedJumps;
             bool hazardMatch = generated.hasHazard == source.hasHazard;
             bool tagMatch = generated.primaryTag == source.primaryTag;
-            float widthDelta = generated.width - Mathf.Abs(source.exitDelta.x);
+            ChunkBlueprintFeatures features = ChunkBlueprintFeatureExtractor.Analyze(generated);
+            Vector2 estimatedExitDelta = features.estimatedExitDelta;
+            Vector2 estimatedExitDeltaDelta = estimatedExitDelta - source.exitDelta;
 
             string status = "Equivalent";
             List<string> reasons = new List<string>();
 
             if (!tagMatch)
                 reasons.Add("primary tag differs");
-            if (difficultyDelta != 0)
+            if (difficultyDelta != 0 && !IsGeneratedSafeRestDifficultyEquivalent(source, generated))
                 reasons.Add($"difficulty delta {difficultyDelta:+#;-#;0}");
             if (jumpsDelta != 0)
                 reasons.Add($"jumps delta {jumpsDelta:+#;-#;0}");
             if (!hazardMatch)
                 reasons.Add("hazard flag differs");
-            if (Mathf.Abs(widthDelta) >= 2f)
-                reasons.Add($"width differs from source exitDelta by {widthDelta:+0.##;-0.##;0}");
+            if (source.maxGapWidth > 0 && generated.primaryTag == ChunkTag.Gap && features.maxGapWidth != source.maxGapWidth)
+                reasons.Add($"max gap delta {features.maxGapWidth - source.maxGapWidth:+#;-#;0}");
+            float verticalExitDeltaTolerance = Mathf.Max(
+                GetGeneratedGapVerticalExitDeltaTolerance(source, generated),
+                Mathf.Max(
+                    GetGeneratedSafeVerticalExitDeltaTolerance(source, generated),
+                    GetGeneratedPrecisionVerticalExitDeltaTolerance(source, generated)));
+            if (Mathf.Abs(estimatedExitDeltaDelta.x) > 1.25f || Mathf.Abs(estimatedExitDeltaDelta.y) > verticalExitDeltaTolerance)
+                reasons.Add($"estimated exit delta differs by ({estimatedExitDeltaDelta.x:+0.##;-0.##;0}, {estimatedExitDeltaDelta.y:+0.##;-0.##;0})");
 
             if (reasons.Count > 0)
                 status = reasons.Count == 1 ? "Close" : "Needs Review";
@@ -323,8 +343,9 @@ public class ChunkCalibrationReporterWindow : EditorWindow
 
             sb.AppendLine(
                 $"{source.name} | {source.primaryTag} | {source.difficultyRating} | {source.estimatedJumps} | {source.hasHazard} | " +
-                $"({source.exitDelta.x:0.##}, {source.exitDelta.y:0.##}) | {generated.chunkName} | {generated.difficultyRating} | " +
-                $"{generated.estimatedJumps} | {generated.hasHazard} | {generated.width} | {difficultyDelta:+#;-#;0} | {status} | {reason}");
+                $"({source.exitDelta.x:0.##}, {source.exitDelta.y:0.##}) | {source.maxGapWidth} | {generated.chunkName} | {generated.difficultyRating} | " +
+                $"{generated.estimatedJumps} | {generated.hasHazard} | {generated.width} | ({estimatedExitDelta.x:0.##}, {estimatedExitDelta.y:0.##}) | " +
+                $"{features.gapCount} | {features.maxGapWidth} | {features.minLandingWidth} | {difficultyDelta:+#;-#;0} | {status} | {reason}");
         }
 
         sb.AppendLine();
@@ -368,10 +389,10 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             int seed = SequenceSampleBaseSeed + runIndex;
             UnityEngine.Random.InitState(seed);
 
-            List<GameObject> sequence = null;
+            IList sequence = null;
             try
             {
-                sequence = buildFreshSequence.Invoke(generator, null) as List<GameObject>;
+                sequence = buildFreshSequence.Invoke(generator, null) as IList;
             }
             catch (Exception ex)
             {
@@ -385,7 +406,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             }
 
             int startOffset = 0;
-            if (hasFixedStartingChunk && sequence.Count > 0 && sequence[0] == generator.startingChunkPrefab)
+            if (hasFixedStartingChunk && sequence.Count > 0 && GetCandidateSourcePrefab(sequence[0]) == generator.startingChunkPrefab)
             {
                 startOffset = 1;
             }
@@ -401,13 +422,40 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             for (int i = startOffset; i < sequence.Count; i++)
             {
                 int generatedSlotIndex = i - startOffset;
-                GameObject prefab = sequence[i];
-                ChunkData data = prefab != null ? prefab.GetComponent<ChunkData>() : null;
+                object candidate = sequence[i];
+                GameObject prefab = GetCandidateSourcePrefab(candidate);
                 float slotTargetDifficulty = GetSlotTargetDifficulty(generator, generatedSlotIndex);
-                int selectedDifficulty = data != null ? data.difficultyRating : -1;
-                string selectedChunkName = prefab != null ? prefab.name : "<null>";
-                string selectedPrimaryTag = data != null ? data.primaryTag.ToString() : "Unknown";
-                float delta = data != null ? data.difficultyRating - slotTargetDifficulty : 0f;
+                int selectedDifficulty = GetCandidateDifficulty(candidate);
+                string selectedChunkName = GetCandidateDisplayName(candidate);
+                ChunkTag selectedTag = GetCandidatePrimaryTag(candidate);
+                string selectedPrimaryTag = selectedTag.ToString();
+                float delta = selectedDifficulty >= 0 ? selectedDifficulty - slotTargetDifficulty : 0f;
+                object previousCandidate = i > 0 ? sequence[i - 1] : null;
+                string previousChunkName = GetCandidateDisplayName(previousCandidate);
+                ChunkTag previousTag = GetCandidatePrimaryTag(previousCandidate);
+                float transitionPressureMultiplier = 1f;
+                string transitionPressureReason = "none";
+
+                if (candidate != null && previousCandidate != null)
+                {
+                    transitionPressureMultiplier = ChunkTransitionPressure.GetSelectionWeightMultiplier(
+                        previousChunkName,
+                        previousTag,
+                        selectedChunkName,
+                        selectedTag,
+                        selectedDifficulty,
+                        slotTargetDifficulty,
+                        generator.targetDifficulty);
+
+                    transitionPressureReason = ChunkTransitionPressure.GetTransitionReason(
+                        previousChunkName,
+                        previousTag,
+                        selectedChunkName,
+                        selectedTag,
+                        selectedDifficulty,
+                        slotTargetDifficulty,
+                        generator.targetDifficulty);
+                }
 
                 slotSamples.Add(new SequenceSlotSample
                 {
@@ -415,10 +463,13 @@ public class ChunkCalibrationReporterWindow : EditorWindow
                     seed = seed,
                     slotIndex = generatedSlotIndex + 1,
                     slotTargetDifficulty = slotTargetDifficulty,
+                    previousChunkName = previousChunkName,
                     selectedChunkName = selectedChunkName,
                     selectedPrimaryTag = selectedPrimaryTag,
                     selectedDifficulty = selectedDifficulty,
-                    deltaFromSlotTarget = delta
+                    deltaFromSlotTarget = delta,
+                    transitionPressureMultiplier = transitionPressureMultiplier,
+                    transitionPressureReason = transitionPressureReason
                 });
 
                 if (prefab == null)
@@ -433,6 +484,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         AppendSequenceRunDetails(sb, slotSamples);
         AppendSequenceSlotSummary(sb, slotSamples);
         AppendSequenceProgressionSummary(sb, slotSamples, warnings);
+        AppendSequenceTransitionPressureSummary(sb, slotSamples);
         AppendSequenceUsageSummary(sb, slotSamples, chunkUsage, tagUsage, chunks);
         AppendPoolSufficiencySnapshot(sb, slotSamples, chunkUsage, chunks, generator, warnings);
     }
@@ -446,15 +498,15 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         sb.AppendLine($"expectedGeneratedSlotsPerRun: {expectedGeneratedSlots}");
         sb.AppendLine($"startingChunkPrefab: {AssetPath(generator.startingChunkPrefab)}");
         sb.AppendLine("slotTargetComparisonExcludesFixedStartingChunk: true");
-        sb.AppendLine("sequenceSamplingReflectsHandcraftedSelectionOnly: true");
+        sb.AppendLine($"sequenceSamplingIncludesGeneratedBlueprintCandidates: {generator.useGeneratedBlueprintCandidateSelection}");
         sb.AppendLine();
     }
 
     private static void AppendSequenceRunDetails(StringBuilder sb, List<SequenceSlotSample> slotSamples)
     {
         sb.AppendLine("### Per-Run Slot Detail");
-        sb.AppendLine("Run | Seed | SlotIndex | SlotTargetDifficulty | SelectedChunk | SelectedPrimaryTag | SelectedDifficulty | DeltaFromSlotTarget");
-        sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | ---");
+        sb.AppendLine("Run | Seed | SlotIndex | SlotTargetDifficulty | PreviousChunk | SelectedChunk | SelectedPrimaryTag | SelectedDifficulty | DeltaFromSlotTarget | PressureMultiplier | PressureReason");
+        sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
 
         if (slotSamples.Count == 0)
         {
@@ -467,8 +519,9 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         {
             SequenceSlotSample sample = slotSamples[i];
             sb.AppendLine(
-                $"{sample.runIndex} | {sample.seed} | {sample.slotIndex} | {sample.slotTargetDifficulty:0.##} | {sample.selectedChunkName} | " +
-                $"{sample.selectedPrimaryTag} | {sample.selectedDifficulty} | {sample.deltaFromSlotTarget:+0.##;-0.##;0}");
+                $"{sample.runIndex} | {sample.seed} | {sample.slotIndex} | {sample.slotTargetDifficulty:0.##} | {sample.previousChunkName} | {sample.selectedChunkName} | " +
+                $"{sample.selectedPrimaryTag} | {sample.selectedDifficulty} | {sample.deltaFromSlotTarget:+0.##;-0.##;0} | " +
+                $"{sample.transitionPressureMultiplier:0.##} | {sample.transitionPressureReason}");
         }
 
         sb.AppendLine();
@@ -610,6 +663,53 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             sb.AppendLine($"reviewNotes: {string.Join("; ", notes)}");
             for (int i = 0; i < notes.Count; i++)
                 warnings.Add($"Sequence sampling: {notes[i]}.");
+        }
+
+        sb.AppendLine();
+    }
+
+    private static void AppendSequenceTransitionPressureSummary(StringBuilder sb, List<SequenceSlotSample> slotSamples)
+    {
+        sb.AppendLine("### Transition Pressure Summary");
+
+        if (slotSamples.Count == 0)
+        {
+            sb.AppendLine("No transition pressure summary is available.");
+            sb.AppendLine();
+            return;
+        }
+
+        int penalizedSelectedTransitions = 0;
+        Dictionary<string, int> reasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        for (int i = 0; i < slotSamples.Count; i++)
+        {
+            SequenceSlotSample sample = slotSamples[i];
+            if (sample.transitionPressureMultiplier >= 0.999f)
+                continue;
+
+            penalizedSelectedTransitions++;
+            IncrementCount(reasonCounts, sample.transitionPressureReason);
+        }
+
+        sb.AppendLine($"selectedTransitionsWithPressurePenalty: {penalizedSelectedTransitions}/{slotSamples.Count}");
+
+        if (reasonCounts.Count == 0)
+        {
+            sb.AppendLine("pressurePenaltyReasons: none selected in current sample");
+            sb.AppendLine();
+            return;
+        }
+
+        sb.AppendLine("PressureReason | Count");
+        sb.AppendLine("--- | ---");
+
+        List<string> reasons = new List<string>(reasonCounts.Keys);
+        reasons.Sort(StringComparer.Ordinal);
+        for (int i = 0; i < reasons.Count; i++)
+        {
+            string reason = reasons[i];
+            sb.AppendLine($"{reason} | {reasonCounts[reason]}");
         }
 
         sb.AppendLine();
@@ -835,6 +935,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             hasHazard = data.hasHazard,
             estimatedJumps = data.estimatedJumps,
             exitDelta = data.exitDelta,
+            maxGapWidth = ChunkBlueprintFeatureExtractor.EstimateSourceMaxGapWidth(prefab),
             replacementEligible = IsReplacementEligible(data.primaryTag)
         });
     }
@@ -925,6 +1026,66 @@ public class ChunkCalibrationReporterWindow : EditorWindow
     {
         UnityEngine.Random.InitState(SampleSeed + salt);
         return SimpleChunkBlueprintGenerator.Generate(request);
+    }
+
+    private static float GetGeneratedGapVerticalExitDeltaTolerance(ChunkRecord source, ChunkBlueprint generated)
+    {
+        if (generated != null &&
+            generated.primaryTag == ChunkTag.Gap &&
+            source.maxGapWidth > 0 &&
+            source.maxGapWidth <= 4)
+        {
+            return 2.25f;
+        }
+
+        return 1.25f;
+    }
+
+    private static bool IsGeneratedSafeRestDifficultyEquivalent(ChunkRecord source, ChunkBlueprint generated)
+    {
+        if (generated == null)
+            return false;
+
+        bool controlledRiseVariant =
+            generated.chunkName == "Generated_Safe_RiseRest_Box2" ||
+            generated.chunkName == "Generated_Safe_RiseRest_Box3";
+
+        return controlledRiseVariant &&
+               source.primaryTag == ChunkTag.Safe &&
+               generated.primaryTag == ChunkTag.Safe &&
+               !source.hasHazard &&
+               source.estimatedJumps == 0 &&
+               generated.difficultyRating == source.difficultyRating + 1;
+    }
+
+    private static float GetGeneratedSafeVerticalExitDeltaTolerance(ChunkRecord source, ChunkBlueprint generated)
+    {
+        if (generated != null &&
+            generated.primaryTag == ChunkTag.Safe &&
+            generated.chunkName.StartsWith("Generated_Safe_") &&
+            source.primaryTag == ChunkTag.Safe &&
+            source.estimatedJumps == 0 &&
+            !source.hasHazard)
+        {
+            return 4.25f;
+        }
+
+        return 1.25f;
+    }
+
+    private static float GetGeneratedPrecisionVerticalExitDeltaTolerance(ChunkRecord source, ChunkBlueprint generated)
+    {
+        if (generated != null &&
+            generated.primaryTag == ChunkTag.Precision &&
+            generated.chunkName.StartsWith("Generated_Precision_ElevatedPlatform_") &&
+            source.primaryTag == ChunkTag.Precision &&
+            source.estimatedJumps == 2 &&
+            !source.hasHazard)
+        {
+            return 2.25f;
+        }
+
+        return 1.25f;
     }
 
     private static BlueprintFeatures AnalyzeBlueprintFeatures(ChunkBlueprint blueprint)
@@ -1085,6 +1246,45 @@ public class ChunkCalibrationReporterWindow : EditorWindow
     {
         float progress = Mathf.Clamp01((generatedSlotIndex + 1f) / Mathf.Max(1, generator.totalChunks - 1));
         return Mathf.Lerp(generator.startDifficultyBias, generator.targetDifficulty, progress);
+    }
+
+    private static GameObject GetCandidateSourcePrefab(object candidate)
+    {
+        if (candidate == null)
+            return null;
+
+        FieldInfo field = candidate.GetType().GetField("sourcePrefab", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return field != null ? field.GetValue(candidate) as GameObject : null;
+    }
+
+    private static string GetCandidateDisplayName(object candidate)
+    {
+        if (candidate == null)
+            return "<none>";
+
+        PropertyInfo property = candidate.GetType().GetProperty("DisplayName", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        object value = property != null ? property.GetValue(candidate, null) : null;
+        return value as string ?? "<unknown>";
+    }
+
+    private static ChunkTag GetCandidatePrimaryTag(object candidate)
+    {
+        if (candidate == null)
+            return ChunkTag.Rest;
+
+        PropertyInfo property = candidate.GetType().GetProperty("PrimaryTag", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        object value = property != null ? property.GetValue(candidate, null) : null;
+        return value is ChunkTag ? (ChunkTag)value : ChunkTag.Rest;
+    }
+
+    private static int GetCandidateDifficulty(object candidate)
+    {
+        if (candidate == null)
+            return -1;
+
+        PropertyInfo property = candidate.GetType().GetProperty("Difficulty", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        object value = property != null ? property.GetValue(candidate, null) : null;
+        return value is int ? (int)value : -1;
     }
 
     private static Dictionary<int, SequenceSlotAggregate> BuildSlotAggregates(List<SequenceSlotSample> slotSamples)
@@ -1272,6 +1472,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         public bool hasHazard;
         public int estimatedJumps;
         public Vector2 exitDelta;
+        public int maxGapWidth;
         public bool replacementEligible;
     }
 
@@ -1288,10 +1489,13 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         public int seed;
         public int slotIndex;
         public float slotTargetDifficulty;
+        public string previousChunkName;
         public string selectedChunkName;
         public string selectedPrimaryTag;
         public int selectedDifficulty;
         public float deltaFromSlotTarget;
+        public float transitionPressureMultiplier;
+        public string transitionPressureReason;
     }
 
     private class SequenceSlotAggregate

@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 6;
 
     [Serializable]
     public class RunRecord
@@ -22,7 +22,10 @@ public static class LevelRunLog
         public float difficultyPreferenceStrength;
         public bool useTwoStepMarkov;
         public bool useGeneratedBlueprintChunks;
+        public bool useGeneratedBlueprintCandidateSelection;
         public float generatedChunkReplacementChance;
+        public int generatedCandidateVariantsPerSource;
+        public float generatedCandidateFamilyWeight;
         public int totalChunksConfigured;
         public int chunkCountThisLevel;
 
@@ -35,6 +38,9 @@ public static class LevelRunLog
         public int hazardChunkCount;
         public int totalEstimatedJumps;
         public int verticalChunkCount;
+        public int transitionPressureCount;
+        public int highPressureTransitionCount;
+        public float transitionPressureScore;
 
         public List<SlotRecord> slots = new List<SlotRecord>();
         public List<DeathEventRecord> deathEvents = new List<DeathEventRecord>();
@@ -51,6 +57,9 @@ public static class LevelRunLog
         public float slotTargetDifficulty;
 
         public string selectedPrefabName;
+        public string selectedCandidateType;
+        public string selectedSourcePrefabName;
+        public string selectedGeneratedBlueprintName;
         public string selectedPrimaryTag;
         public int selectedDifficulty = -1;
         public bool selectedHasHazard;
@@ -68,7 +77,27 @@ public static class LevelRunLog
         public bool replacementAttempted;
         public bool replacementSucceeded;
         public string replacementMode;
+        public string replacementReason;
+        public string generatedRejectionReason;
         public string generatedBlueprintName;
+        public string generatedBlueprintRows;
+        public string generatedBlueprintFeatureSummary;
+        public int generatedBlueprintWidth;
+        public int generatedBlueprintHeight;
+        public int generatedBlueprintGapCount;
+        public int generatedBlueprintMaxGapWidth;
+        public int generatedBlueprintMinLandingWidth;
+        public int generatedBlueprintSolidCount;
+        public int generatedBlueprintHazardCount;
+        public Vector2 generatedBlueprintEstimatedExitDelta;
+
+        public bool hasPreviousTransition;
+        public string previousSpawnedChunkName;
+        public float transitionPressureMultiplier = 1f;
+        public bool transitionPressurePenalized;
+        public string transitionPressureReason;
+        public string transitionPressureSeverity;
+        public float transitionPressureScore;
 
         public int deathsAttributedToSlot;
     }
@@ -95,20 +124,32 @@ public static class LevelRunLog
         public float deathsPerChunk;
         public float timePerChunk;
         public float actualDifficulty;
+        public float actualTargetDelta;
+        public float performanceStrain;
+        public float smoothedStrain;
 
         public bool cleanRun;
         public bool tooHard;
         public bool tooEasySingleRun;
         public bool tooEasyByStreak;
+        public bool actualDifficultyOvershoot;
+        public bool actualDifficultyUndershoot;
+        public bool increaseBlockedByActualOvershoot;
+        public bool minorErrorGuardApplied;
         public int cleanRunStreakBefore;
         public int cleanRunStreakAfter;
 
+        public string controllerName;
+        public string evidenceSummary;
         public float hardDeathsPerChunkThreshold;
         public float slowTimePerChunkThreshold;
         public float easyDeathsPerChunkThreshold;
         public float fastTimePerChunkThreshold;
         public float targetDifficultyStep;
         public int cleanRunStreakThreshold;
+        public float actualDifficultyOvershootTolerance;
+        public float actualDifficultyUndershootTolerance;
+        public float strainSmoothing;
     }
 
     public static string GetLogDirectoryPath()

@@ -58,6 +58,8 @@ public static class ChunkBlueprintValidator
                         break;
 
                     case '#':
+                    case 'B':
+                    case 'P':
                         solidCount++;
                         break;
 

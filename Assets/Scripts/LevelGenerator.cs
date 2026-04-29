@@ -33,11 +33,20 @@ public class LevelGenerator : MonoBehaviour
     [Tooltip("If enabled, some selected chunks may be replaced by runtime-generated blueprint chunks.")]
     public bool useGeneratedBlueprintChunks = true;
 
+    [Tooltip("If enabled, validated blueprint variants join the sequencing candidate pool before selection.")]
+    public bool useGeneratedBlueprintCandidateSelection = true;
+
     [Tooltip("Builder used to convert valid blueprints into runtime chunk GameObjects.")]
     [SerializeField] private ChunkBlueprintRuntimeBuilder blueprintRuntimeBuilder;
 
     [Tooltip("Chance that an eligible handcrafted chunk is replaced with a generated blueprint version.")]
     [Range(0f, 1f)] public float generatedChunkReplacementChance = 0.25f;
+
+    [Tooltip("Maximum validated generated variants offered per eligible source chunk during sequencing.")]
+    [Range(1, 5)] public int generatedCandidateVariantsPerSource = 2;
+
+    [Tooltip("Total source-family weight shared by generated variants from one source chunk.")]
+    [Range(0f, 2f)] public float generatedCandidateFamilyWeight = 0.75f;
 
     [Tooltip("Only these chunk families are eligible for generated replacement.")]
     public bool allowGeneratedGap = true;
@@ -95,7 +104,7 @@ public class LevelGenerator : MonoBehaviour
     private readonly List<ChunkData> spawnedChunkData = new List<ChunkData>();
 
     // Track exact prefab sequence for replay
-    private readonly List<GameObject> lastGeneratedSequence = new List<GameObject>();
+    private readonly List<ChunkSelectionCandidate> lastGeneratedSequence = new List<ChunkSelectionCandidate>();
     private readonly Dictionary<ChunkData, LevelRunLog.SlotRecord> activeSlotRecordsByChunk =
         new Dictionary<ChunkData, LevelRunLog.SlotRecord>();
 
@@ -103,6 +112,94 @@ public class LevelGenerator : MonoBehaviour
     private int currentRunSeed;
     private int lastGeneratedRunSeed;
     private int generatedRunCounter;
+
+    private class ChunkSelectionCandidate
+    {
+        public GameObject sourcePrefab;
+        public ChunkBlueprint blueprint;
+        public ChunkBlueprintFeatures blueprintFeatures;
+        public string validationReason = "none";
+        public float sourceFamilyWeight = 1f;
+
+        public bool IsGenerated => blueprint != null;
+
+        public string CandidateType => IsGenerated ? "generated_blueprint" : "handcrafted";
+
+        public string DisplayName
+        {
+            get
+            {
+                if (IsGenerated && !string.IsNullOrEmpty(blueprint.chunkName))
+                    return blueprint.chunkName;
+
+                return sourcePrefab != null ? sourcePrefab.name : "MissingCandidate";
+            }
+        }
+
+        public string SourceName => sourcePrefab != null ? sourcePrefab.name : "MissingSource";
+
+        public ChunkData SourceData => sourcePrefab != null ? sourcePrefab.GetComponent<ChunkData>() : null;
+
+        public ChunkTag PrimaryTag
+        {
+            get
+            {
+                if (IsGenerated)
+                    return blueprint.primaryTag;
+
+                ChunkData data = SourceData;
+                return data != null ? data.primaryTag : ChunkTag.Rest;
+            }
+        }
+
+        public int Difficulty
+        {
+            get
+            {
+                if (IsGenerated)
+                    return blueprint.difficultyRating;
+
+                ChunkData data = SourceData;
+                return data != null ? data.difficultyRating : 0;
+            }
+        }
+
+        public bool HasHazard
+        {
+            get
+            {
+                if (IsGenerated)
+                    return blueprint.hasHazard;
+
+                ChunkData data = SourceData;
+                return data != null && data.hasHazard;
+            }
+        }
+
+        public int EstimatedJumps
+        {
+            get
+            {
+                if (IsGenerated)
+                    return blueprint.estimatedJumps;
+
+                ChunkData data = SourceData;
+                return data != null ? data.estimatedJumps : 0;
+            }
+        }
+
+        public Vector2 ExitDelta
+        {
+            get
+            {
+                if (IsGenerated && blueprintFeatures != null)
+                    return blueprintFeatures.estimatedExitDelta;
+
+                ChunkData data = SourceData;
+                return data != null ? data.exitDelta : Vector2.zero;
+            }
+        }
+    }
 
     // Useful for other scripts (LevelManager etc.)
     public Vector3 FirstEntryWorld { get; private set; }
@@ -232,7 +329,7 @@ public class LevelGenerator : MonoBehaviour
 
     private void GenerateLevelWithSeed(
         int runSeed,
-        List<GameObject> sourceSequence,
+        List<ChunkSelectionCandidate> sourceSequence,
         bool rememberAsReplaySequence,
         bool isReplay,
         int replaySourceSeed)
@@ -245,8 +342,8 @@ public class LevelGenerator : MonoBehaviour
             currentRunSeed = runSeed;
             UnityEngine.Random.InitState(runSeed);
 
-            List<GameObject> sequence = sourceSequence != null
-                ? new List<GameObject>(sourceSequence)
+            List<ChunkSelectionCandidate> sequence = sourceSequence != null
+                ? new List<ChunkSelectionCandidate>(sourceSequence)
                 : BuildFreshSequence();
 
             if (sequence == null || sequence.Count == 0)
@@ -287,14 +384,17 @@ public class LevelGenerator : MonoBehaviour
             difficultyPreferenceStrength = difficultyPreferenceStrength,
             useTwoStepMarkov = useTwoStepMarkov,
             useGeneratedBlueprintChunks = useGeneratedBlueprintChunks,
+            useGeneratedBlueprintCandidateSelection = useGeneratedBlueprintCandidateSelection,
             generatedChunkReplacementChance = generatedChunkReplacementChance,
+            generatedCandidateVariantsPerSource = generatedCandidateVariantsPerSource,
+            generatedCandidateFamilyWeight = generatedCandidateFamilyWeight,
             totalChunksConfigured = totalChunks
         };
     }
 
-    private List<GameObject> BuildFreshSequence()
+    private List<ChunkSelectionCandidate> BuildFreshSequence()
     {
-        List<GameObject> sequence = new List<GameObject>();
+        List<ChunkSelectionCandidate> sequence = new List<ChunkSelectionCandidate>();
 
         if ((chunkPrefabs == null || chunkPrefabs.Length == 0) && startingChunkPrefab == null)
         {
@@ -312,7 +412,7 @@ public class LevelGenerator : MonoBehaviour
 
         if (startingChunkPrefab != null && remainingChunks > 0)
         {
-            sequence.Add(startingChunkPrefab);
+            sequence.Add(CreateHandcraftedCandidate(startingChunkPrefab));
 
             ChunkData startData = startingChunkPrefab.GetComponent<ChunkData>();
             if (startData != null)
@@ -330,33 +430,30 @@ public class LevelGenerator : MonoBehaviour
         {
             if (chunkPrefabs == null || chunkPrefabs.Length == 0) break;
 
-            GameObject prefab = SelectNextChunkPrefab(prev2, prev1, previousPrefabName, samePrimaryTagStreak, i);
-            if (prefab == null)
+            ChunkSelectionCandidate candidate = SelectNextChunkCandidate(prev2, prev1, previousPrefabName, samePrimaryTagStreak, i);
+            if (candidate == null)
             {
                 Debug.LogWarning("LevelGenerator: No valid next chunk prefab could be selected.");
                 break;
             }
 
-            sequence.Add(prefab);
+            sequence.Add(candidate);
 
-            ChunkData data = prefab.GetComponent<ChunkData>();
-            if (data != null)
-            {
-                if (data.primaryTag == prev1)
-                    samePrimaryTagStreak++;
-                else
-                    samePrimaryTagStreak = 1;
+            ChunkTag selectedTag = candidate.PrimaryTag;
+            if (selectedTag == prev1)
+                samePrimaryTagStreak++;
+            else
+                samePrimaryTagStreak = 1;
 
-                prev2 = prev1;
-                prev1 = data.primaryTag;
-                previousPrefabName = prefab.name;
-            }
+            prev2 = prev1;
+            prev1 = selectedTag;
+            previousPrefabName = candidate.SourceName;
         }
 
         return sequence;
     }
 
-    private void GenerateLevelFromSequence(List<GameObject> sequence, bool rememberAsReplaySequence)
+    private void GenerateLevelFromSequence(List<ChunkSelectionCandidate> sequence, bool rememberAsReplaySequence)
     {
         if (clearBeforeGenerate) ClearLevel();
 
@@ -378,32 +475,37 @@ public class LevelGenerator : MonoBehaviour
         Vector3 nextAttachPoint = (startPoint != null) ? startPoint.position : transform.position;
         bool hasFixedStartingChunk = startingChunkPrefab != null &&
                                      sequence.Count > 0 &&
-                                     sequence[0] == startingChunkPrefab;
+                                     sequence[0] != null &&
+                                     sequence[0].sourcePrefab == startingChunkPrefab;
 
         FirstEntryWorld = nextAttachPoint;
         LastExitWorld = nextAttachPoint;
 
         for (int i = 0; i < sequence.Count; i++)
         {
-            GameObject prefab = sequence[i];
-            if (prefab == null) continue;
+            ChunkSelectionCandidate candidate = sequence[i];
+            if (candidate == null || candidate.sourcePrefab == null) continue;
 
             bool isStartingChunk = hasFixedStartingChunk && i == 0;
             int generatedSlotIndex = isStartingChunk ? -1 : (hasFixedStartingChunk ? i - 1 : i);
-            LevelRunLog.SlotRecord slotRecord = CreateSelectedSlotRecord(prefab, i, generatedSlotIndex, isStartingChunk);
+            LevelRunLog.SlotRecord slotRecord = CreateSelectedSlotRecord(candidate, i, generatedSlotIndex, isStartingChunk);
 
-            SpawnedChunkResult spawnResult = SpawnChunkResultFromPrefabOrBlueprint(prefab, i);
+            SpawnedChunkResult spawnResult = SpawnChunkResultFromCandidate(candidate, i);
             slotRecord.spawnSucceeded = spawnResult.chunk != null;
             slotRecord.replacementAttempted = spawnResult.replacementAttempted;
             slotRecord.replacementSucceeded = spawnResult.replacementSucceeded;
             slotRecord.replacementMode = spawnResult.replacementMode;
+            slotRecord.replacementReason = spawnResult.replacementReason;
+            slotRecord.generatedRejectionReason = spawnResult.generatedRejectionReason;
             slotRecord.generatedBlueprintName = spawnResult.generatedBlueprintName;
+            slotRecord.generatedBlueprintRows = spawnResult.generatedBlueprintRows;
+            PopulateGeneratedBlueprintFeatureRecord(slotRecord, spawnResult.generatedBlueprintFeatures);
 
             GameObject chunk = spawnResult.chunk;
             if (chunk == null)
             {
                 if (currentRunLog != null) currentRunLog.slots.Add(slotRecord);
-                Debug.LogWarning($"LevelGenerator: Failed to spawn chunk for prefab '{prefab.name}'.");
+                Debug.LogWarning($"LevelGenerator: Failed to spawn chunk for candidate '{candidate.DisplayName}'.");
                 continue;
             }
 
@@ -432,9 +534,70 @@ public class LevelGenerator : MonoBehaviour
             }
         }
 
+        PopulateTransitionPressureRecords(currentRunLog);
         SpawnEndPointAt(LastExitWorld);
         RecalculateLevelBounds();
         RecalculateDifficultyStats();
+    }
+
+    private ChunkSelectionCandidate CreateHandcraftedCandidate(GameObject prefab)
+    {
+        return new ChunkSelectionCandidate
+        {
+            sourcePrefab = prefab,
+            validationReason = "handcrafted",
+            sourceFamilyWeight = 1f
+        };
+    }
+
+    private SpawnedChunkResult SpawnChunkResultFromCandidate(ChunkSelectionCandidate candidate, int slotIndex)
+    {
+        if (candidate == null || candidate.sourcePrefab == null) return default;
+
+        if (candidate.IsGenerated)
+            return SpawnGeneratedCandidate(candidate);
+
+        return SpawnChunkResultFromPrefabOrBlueprint(candidate.sourcePrefab, slotIndex);
+    }
+
+    private SpawnedChunkResult SpawnGeneratedCandidate(ChunkSelectionCandidate candidate)
+    {
+        if (candidate == null || candidate.sourcePrefab == null || candidate.blueprint == null)
+            return default;
+
+        GameObject generatedChunk = blueprintRuntimeBuilder != null
+            ? blueprintRuntimeBuilder.BuildChunk(candidate.blueprint, Vector3.zero)
+            : null;
+
+        if (generatedChunk != null)
+        {
+            return new SpawnedChunkResult
+            {
+                chunk = generatedChunk,
+                replacementAttempted = false,
+                replacementSucceeded = false,
+                replacementMode = "generated_candidate",
+                replacementReason = "selected_validated_blueprint_candidate",
+                generatedRejectionReason = "accepted",
+                generatedBlueprintName = candidate.blueprint.chunkName,
+                generatedBlueprintRows = ChunkBlueprintFeatureExtractor.RowsToInlineText(candidate.blueprint),
+                generatedBlueprintFeatures = candidate.blueprintFeatures
+            };
+        }
+
+        Debug.LogWarning($"LevelGenerator: Falling back to handcrafted prefab for generated candidate '{candidate.DisplayName}'.");
+        return new SpawnedChunkResult
+        {
+            chunk = Instantiate(candidate.sourcePrefab, Vector3.zero, Quaternion.identity),
+            replacementAttempted = false,
+            replacementSucceeded = false,
+            replacementMode = "generated_candidate_fallback",
+            replacementReason = "selected_validated_blueprint_candidate",
+            generatedRejectionReason = "runtime_builder_failed",
+            generatedBlueprintName = candidate.blueprint.chunkName,
+            generatedBlueprintRows = ChunkBlueprintFeatureExtractor.RowsToInlineText(candidate.blueprint),
+            generatedBlueprintFeatures = candidate.blueprintFeatures
+        };
     }
 
     private SpawnedChunkResult SpawnChunkResultFromPrefabOrBlueprint(GameObject prefab, int slotIndex)
@@ -452,12 +615,24 @@ public class LevelGenerator : MonoBehaviour
                 replacementAttempted = false,
                 replacementSucceeded = false,
                 replacementMode = "none",
+                replacementReason = "none",
+                generatedRejectionReason = "none",
                 generatedBlueprintName = string.Empty
             };
         }
 
         string generatedBlueprintName;
-        GameObject generatedChunk = TryBuildGeneratedChunkFromPrefab(prefab, cd, out generatedBlueprintName);
+        string generatedBlueprintRows;
+        ChunkBlueprintFeatures generatedBlueprintFeatures;
+        string generatedRejectionReason;
+        string replacementReason = GetGeneratedReplacementReason(cd);
+        GameObject generatedChunk = TryBuildGeneratedChunkFromPrefab(
+            prefab,
+            cd,
+            out generatedBlueprintName,
+            out generatedBlueprintRows,
+            out generatedBlueprintFeatures,
+            out generatedRejectionReason);
 
         if (generatedChunk != null)
         {
@@ -467,7 +642,11 @@ public class LevelGenerator : MonoBehaviour
                 replacementAttempted = true,
                 replacementSucceeded = true,
                 replacementMode = "generated_success",
-                generatedBlueprintName = generatedBlueprintName
+                replacementReason = replacementReason,
+                generatedRejectionReason = generatedRejectionReason,
+                generatedBlueprintName = generatedBlueprintName,
+                generatedBlueprintRows = generatedBlueprintRows,
+                generatedBlueprintFeatures = generatedBlueprintFeatures
             };
         }
 
@@ -478,13 +657,26 @@ public class LevelGenerator : MonoBehaviour
             replacementAttempted = true,
             replacementSucceeded = false,
             replacementMode = "generated_fallback",
-            generatedBlueprintName = generatedBlueprintName
+            replacementReason = replacementReason,
+            generatedRejectionReason = generatedRejectionReason,
+            generatedBlueprintName = generatedBlueprintName,
+            generatedBlueprintRows = generatedBlueprintRows,
+            generatedBlueprintFeatures = generatedBlueprintFeatures
         };
+    }
+
+    private string GetGeneratedReplacementReason(ChunkData cd)
+    {
+        if (cd == null)
+            return "unknown_generated_replacement";
+
+        return $"random_eligible_{cd.primaryTag.ToString().ToLowerInvariant()}_replacement";
     }
 
     private bool ShouldUseGeneratedChunk(ChunkData cd, int slotIndex)
     {
         if (!useGeneratedBlueprintChunks) return false;
+        if (useGeneratedBlueprintCandidateSelection) return false;
         if (blueprintRuntimeBuilder == null) return false;
         if (cd == null) return false;
 
@@ -499,7 +691,7 @@ public class LevelGenerator : MonoBehaviour
                 return allowGeneratedGap;
 
             case ChunkTag.Precision:
-                return allowGeneratedPrecision;
+                return allowGeneratedPrecision && IsElevatedPlatformPrecisionSource(cd);
 
             case ChunkTag.Vertical:
                 return allowGeneratedVertical;
@@ -508,7 +700,6 @@ public class LevelGenerator : MonoBehaviour
                 return allowGeneratedSpikes;
 
             case ChunkTag.Safe:
-            case ChunkTag.Rest:
                 return allowGeneratedSafeRest;
 
             default:
@@ -516,29 +707,39 @@ public class LevelGenerator : MonoBehaviour
         }
     }
 
-    private GameObject TryBuildGeneratedChunkFromPrefab(GameObject prefab, ChunkData cd, out string generatedBlueprintName)
+    private bool IsElevatedPlatformPrecisionSource(ChunkData cd)
+    {
+        return cd != null && cd.gameObject.name.Contains("Chunk_ElevatedPlatform_Tilemap");
+    }
+
+    private GameObject TryBuildGeneratedChunkFromPrefab(
+        GameObject prefab,
+        ChunkData cd,
+        out string generatedBlueprintName,
+        out string generatedBlueprintRows,
+        out ChunkBlueprintFeatures generatedBlueprintFeatures,
+        out string generatedRejectionReason)
     {
         generatedBlueprintName = string.Empty;
+        generatedBlueprintRows = string.Empty;
+        generatedBlueprintFeatures = null;
+        generatedRejectionReason = "not_attempted";
 
         if (cd == null) return null;
 
-        ChunkGenerationRequest request = new ChunkGenerationRequest
-        {
-            requestedPrimaryTag = cd.primaryTag,
-            targetDifficulty = cd.difficultyRating,
-            requireHazard = cd.hasHazard,
-            preferredWidth = GetPreferredWidthForTag(cd),
-            preferredHeight = GetPreferredHeightForTag(cd)
-        };
+        ChunkGenerationRequest request = CreateGenerationRequest(prefab, cd);
 
         ChunkBlueprint blueprint = SimpleChunkBlueprintGenerator.Generate(request);
         if (blueprint == null)
         {
             Debug.LogWarning($"LevelGenerator: Generator returned null for '{prefab.name}'.");
+            generatedRejectionReason = "generator_returned_null";
             return null;
         }
 
         generatedBlueprintName = blueprint.chunkName;
+        generatedBlueprintRows = ChunkBlueprintFeatureExtractor.RowsToInlineText(blueprint);
+        generatedBlueprintFeatures = ChunkBlueprintFeatureExtractor.Analyze(blueprint);
 
         ChunkBlueprintValidationResult validation = ChunkBlueprintValidator.Validate(blueprint);
         if (!validation.isValid)
@@ -548,6 +749,13 @@ public class LevelGenerator : MonoBehaviour
             {
                 Debug.LogWarning($"  Error {i + 1}: {validation.errors[i]}");
             }
+            generatedRejectionReason = "validation_failed";
+            return null;
+        }
+
+        if (!IsGeneratedReplacementAcceptable(cd, request, blueprint, generatedBlueprintFeatures, out generatedRejectionReason))
+        {
+            Debug.LogWarning($"LevelGenerator: Generated blueprint rejected for '{prefab.name}': {generatedRejectionReason}");
             return null;
         }
 
@@ -555,20 +763,177 @@ public class LevelGenerator : MonoBehaviour
         if (built == null)
         {
             Debug.LogWarning($"LevelGenerator: Runtime builder failed for '{prefab.name}'.");
+            generatedRejectionReason = "runtime_builder_failed";
             return null;
         }
 
+        generatedRejectionReason = "accepted";
         return built;
     }
 
-    private LevelRunLog.SlotRecord CreateSelectedSlotRecord(GameObject prefab, int sequenceIndex, int generatedSlotIndex, bool isStartingChunk)
+    private ChunkGenerationRequest CreateGenerationRequest(GameObject prefab, ChunkData cd)
+    {
+        if (cd == null)
+            return null;
+
+        return new ChunkGenerationRequest
+        {
+            requestedPrimaryTag = cd.primaryTag,
+            targetDifficulty = cd.difficultyRating,
+            requireHazard = cd.hasHazard,
+            preferredWidth = GetPreferredWidthForTag(cd),
+            preferredHeight = GetPreferredHeightForTag(cd),
+            hasSourceContext = true,
+            sourceChunkName = prefab != null ? prefab.name : string.Empty,
+            sourceDifficulty = cd.difficultyRating,
+            sourceHasHazard = cd.hasHazard,
+            sourceEstimatedJumps = cd.estimatedJumps,
+            sourceExitDelta = cd.exitDelta,
+            sourceMaxGapWidth = ChunkBlueprintFeatureExtractor.EstimateSourceMaxGapWidth(prefab)
+        };
+    }
+
+    private bool IsGeneratedReplacementAcceptable(
+        ChunkData source,
+        ChunkGenerationRequest request,
+        ChunkBlueprint generated,
+        ChunkBlueprintFeatures features,
+        out string rejectionReason)
+    {
+        rejectionReason = "accepted";
+
+        if (source == null || generated == null || features == null)
+        {
+            rejectionReason = "missing_source_or_generated_data";
+            return false;
+        }
+
+        if (generated.primaryTag != source.primaryTag)
+        {
+            rejectionReason = $"primary_tag_mismatch:{source.primaryTag}->{generated.primaryTag}";
+            return false;
+        }
+
+        if (generated.hasHazard != source.hasHazard)
+        {
+            rejectionReason = $"hazard_mismatch:{source.hasHazard}->{generated.hasHazard}";
+            return false;
+        }
+
+        int difficultyDelta = generated.difficultyRating - source.difficultyRating;
+        if (Mathf.Abs(difficultyDelta) > 0 && !IsGeneratedSafeRestDifficultyEquivalent(source, generated))
+        {
+            rejectionReason = $"difficulty_delta:{difficultyDelta:+#;-#;0}";
+            return false;
+        }
+
+        int jumpsDelta = generated.estimatedJumps - source.estimatedJumps;
+        if (Mathf.Abs(jumpsDelta) > 1)
+        {
+            rejectionReason = $"jump_delta:{jumpsDelta:+#;-#;0}";
+            return false;
+        }
+
+        if (request != null && request.sourceMaxGapWidth > 0 && generated.primaryTag == ChunkTag.Gap)
+        {
+            int gapDelta = features.maxGapWidth - request.sourceMaxGapWidth;
+            if (gapDelta != 0)
+            {
+                rejectionReason = $"max_gap_delta:{gapDelta:+#;-#;0}";
+                return false;
+            }
+        }
+
+        Vector2 exitDeltaDiff = features.estimatedExitDelta - source.exitDelta;
+        const float horizontalExitDeltaTolerance = 1.25f;
+        float verticalExitDeltaTolerance = Mathf.Max(
+            GetGeneratedGapVerticalExitDeltaTolerance(request, generated),
+            Mathf.Max(
+                GetGeneratedSafeVerticalExitDeltaTolerance(request, generated),
+                GetGeneratedPrecisionVerticalExitDeltaTolerance(request, generated)));
+        if (Mathf.Abs(exitDeltaDiff.x) > horizontalExitDeltaTolerance || Mathf.Abs(exitDeltaDiff.y) > verticalExitDeltaTolerance)
+        {
+            rejectionReason = $"exit_delta_mismatch:({exitDeltaDiff.x:+0.##;-0.##;0},{exitDeltaDiff.y:+0.##;-0.##;0})";
+            return false;
+        }
+
+        return true;
+    }
+
+    private float GetGeneratedGapVerticalExitDeltaTolerance(ChunkGenerationRequest request, ChunkBlueprint generated)
+    {
+        if (request != null &&
+            generated != null &&
+            generated.primaryTag == ChunkTag.Gap &&
+            request.sourceMaxGapWidth > 0 &&
+            request.sourceMaxGapWidth <= 4)
+        {
+            return 2.25f;
+        }
+
+        return 1.25f;
+    }
+
+    private bool IsGeneratedSafeRestDifficultyEquivalent(ChunkData source, ChunkBlueprint generated)
+    {
+        if (source == null || generated == null)
+            return false;
+
+        bool controlledRiseVariant =
+            generated.chunkName == "Generated_Safe_RiseRest_Box2" ||
+            generated.chunkName == "Generated_Safe_RiseRest_Box3";
+
+        return controlledRiseVariant &&
+               source.primaryTag == ChunkTag.Safe &&
+               generated.primaryTag == ChunkTag.Safe &&
+               !source.hasHazard &&
+               source.estimatedJumps == 0 &&
+               generated.difficultyRating == source.difficultyRating + 1;
+    }
+
+    private float GetGeneratedSafeVerticalExitDeltaTolerance(ChunkGenerationRequest request, ChunkBlueprint generated)
+    {
+        if (request != null &&
+            generated != null &&
+            generated.primaryTag == ChunkTag.Safe &&
+            generated.chunkName.StartsWith("Generated_Safe_") &&
+            request.hasSourceContext &&
+            request.sourceEstimatedJumps == 0 &&
+            !request.sourceHasHazard)
+        {
+            return 4.25f;
+        }
+
+        return 1.25f;
+    }
+
+    private float GetGeneratedPrecisionVerticalExitDeltaTolerance(ChunkGenerationRequest request, ChunkBlueprint generated)
+    {
+        if (request != null &&
+            generated != null &&
+            generated.primaryTag == ChunkTag.Precision &&
+            generated.chunkName.StartsWith("Generated_Precision_ElevatedPlatform_") &&
+            request.hasSourceContext &&
+            request.sourceEstimatedJumps == 2 &&
+            !request.sourceHasHazard)
+        {
+            return 2.25f;
+        }
+
+        return 1.25f;
+    }
+
+    private LevelRunLog.SlotRecord CreateSelectedSlotRecord(ChunkSelectionCandidate candidate, int sequenceIndex, int generatedSlotIndex, bool isStartingChunk)
     {
         LevelRunLog.SlotRecord record = new LevelRunLog.SlotRecord
         {
             sequenceIndex = sequenceIndex,
             generatedSlotIndex = generatedSlotIndex,
             isStartingChunk = isStartingChunk,
-            replacementMode = "none"
+            selectedCandidateType = candidate != null ? candidate.CandidateType : "missing",
+            replacementMode = "none",
+            replacementReason = "none",
+            generatedRejectionReason = "none"
         };
 
         if (!isStartingChunk && generatedSlotIndex >= 0)
@@ -577,23 +942,20 @@ public class LevelGenerator : MonoBehaviour
             record.slotTargetDifficulty = GetSlotTargetDifficultyForGeneratedSlotIndex(generatedSlotIndex);
         }
 
-        if (prefab == null)
+        if (candidate == null || candidate.sourcePrefab == null)
         {
             record.selectedPrefabName = "MissingPrefab";
             return record;
         }
 
-        record.selectedPrefabName = LevelRunLog.CleanName(prefab.name);
-
-        ChunkData selectedData = prefab.GetComponent<ChunkData>();
-        if (selectedData == null)
-            return record;
-
-        record.selectedPrimaryTag = selectedData.primaryTag.ToString();
-        record.selectedDifficulty = selectedData.difficultyRating;
-        record.selectedHasHazard = selectedData.hasHazard;
-        record.selectedEstimatedJumps = selectedData.estimatedJumps;
-        record.selectedExitDelta = selectedData.exitDelta;
+        record.selectedPrefabName = LevelRunLog.CleanName(candidate.DisplayName);
+        record.selectedSourcePrefabName = LevelRunLog.CleanName(candidate.SourceName);
+        record.selectedGeneratedBlueprintName = candidate.IsGenerated ? candidate.blueprint.chunkName : string.Empty;
+        record.selectedPrimaryTag = candidate.PrimaryTag.ToString();
+        record.selectedDifficulty = candidate.Difficulty;
+        record.selectedHasHazard = candidate.HasHazard;
+        record.selectedEstimatedJumps = candidate.EstimatedJumps;
+        record.selectedExitDelta = candidate.ExitDelta;
 
         return record;
     }
@@ -614,6 +976,147 @@ public class LevelGenerator : MonoBehaviour
         slotRecord.spawnedHasHazard = spawnedData.hasHazard;
         slotRecord.spawnedEstimatedJumps = spawnedData.estimatedJumps;
         slotRecord.spawnedExitDelta = spawnedData.exitDelta;
+    }
+
+    private void PopulateGeneratedBlueprintFeatureRecord(LevelRunLog.SlotRecord slotRecord, ChunkBlueprintFeatures features)
+    {
+        if (slotRecord == null || features == null)
+            return;
+
+        slotRecord.generatedBlueprintFeatureSummary = features.ToSummary();
+        slotRecord.generatedBlueprintWidth = features.width;
+        slotRecord.generatedBlueprintHeight = features.height;
+        slotRecord.generatedBlueprintGapCount = features.gapCount;
+        slotRecord.generatedBlueprintMaxGapWidth = features.maxGapWidth;
+        slotRecord.generatedBlueprintMinLandingWidth = features.minLandingWidth;
+        slotRecord.generatedBlueprintSolidCount = features.solidCount;
+        slotRecord.generatedBlueprintHazardCount = features.hazardCount;
+        slotRecord.generatedBlueprintEstimatedExitDelta = features.estimatedExitDelta;
+    }
+
+    private void PopulateTransitionPressureRecords(LevelRunLog.RunRecord runRecord)
+    {
+        if (runRecord == null || runRecord.slots == null)
+            return;
+
+        runRecord.transitionPressureCount = 0;
+        runRecord.highPressureTransitionCount = 0;
+        runRecord.transitionPressureScore = 0f;
+
+        for (int i = 0; i < runRecord.slots.Count; i++)
+        {
+            LevelRunLog.SlotRecord current = runRecord.slots[i];
+            if (current == null)
+                continue;
+
+            current.hasPreviousTransition = false;
+            current.previousSpawnedChunkName = string.Empty;
+            current.transitionPressureMultiplier = 1f;
+            current.transitionPressurePenalized = false;
+            current.transitionPressureReason = "none";
+            current.transitionPressureSeverity = "none";
+            current.transitionPressureScore = 0f;
+
+            if (i == 0)
+                continue;
+
+            LevelRunLog.SlotRecord previous = runRecord.slots[i - 1];
+            if (previous == null)
+                continue;
+
+            string previousName = GetEffectiveSlotChunkName(previous);
+            string currentName = GetEffectiveSlotChunkName(current);
+            if (string.IsNullOrEmpty(previousName) || string.IsNullOrEmpty(currentName))
+                continue;
+
+            ChunkTag previousTag = GetEffectiveSlotChunkTag(previous);
+            ChunkTag currentTag = GetEffectiveSlotChunkTag(current);
+            int currentDifficulty = GetEffectiveSlotDifficulty(current);
+            float slotTarget = current.hasSlotTargetDifficulty ? current.slotTargetDifficulty : targetDifficulty;
+
+            float multiplier = ChunkTransitionPressure.GetSelectionWeightMultiplier(
+                previousName,
+                previousTag,
+                currentName,
+                currentTag,
+                currentDifficulty,
+                slotTarget,
+                targetDifficulty);
+
+            string reason = ChunkTransitionPressure.GetTransitionReason(
+                previousName,
+                previousTag,
+                currentName,
+                currentTag,
+                currentDifficulty,
+                slotTarget,
+                targetDifficulty);
+
+            string severity = ChunkTransitionPressure.GetSeverityFromMultiplier(multiplier);
+            float pressureScore = ChunkTransitionPressure.GetPressureScoreFromMultiplier(multiplier);
+
+            current.hasPreviousTransition = true;
+            current.previousSpawnedChunkName = previousName;
+            current.transitionPressureMultiplier = multiplier;
+            current.transitionPressurePenalized = pressureScore > 0f;
+            current.transitionPressureReason = reason;
+            current.transitionPressureSeverity = severity;
+            current.transitionPressureScore = pressureScore;
+
+            if (pressureScore > 0f)
+            {
+                runRecord.transitionPressureCount++;
+                runRecord.transitionPressureScore += pressureScore;
+
+                if (severity == "strong" || severity == "severe")
+                    runRecord.highPressureTransitionCount++;
+            }
+        }
+    }
+
+    private string GetEffectiveSlotChunkName(LevelRunLog.SlotRecord slot)
+    {
+        if (slot == null)
+            return string.Empty;
+
+        if (!string.IsNullOrEmpty(slot.spawnedChunkName))
+            return slot.spawnedChunkName;
+
+        return slot.selectedPrefabName ?? string.Empty;
+    }
+
+    private ChunkTag GetEffectiveSlotChunkTag(LevelRunLog.SlotRecord slot)
+    {
+        if (slot == null)
+            return ChunkTag.Rest;
+
+        if (TryParseChunkTag(slot.spawnedPrimaryTag, out ChunkTag spawnedTag))
+            return spawnedTag;
+
+        if (TryParseChunkTag(slot.selectedPrimaryTag, out ChunkTag selectedTag))
+            return selectedTag;
+
+        return ChunkTag.Rest;
+    }
+
+    private int GetEffectiveSlotDifficulty(LevelRunLog.SlotRecord slot)
+    {
+        if (slot == null)
+            return 0;
+
+        if (slot.spawnedDifficulty >= 0)
+            return slot.spawnedDifficulty;
+
+        return Mathf.Max(0, slot.selectedDifficulty);
+    }
+
+    private bool TryParseChunkTag(string value, out ChunkTag tag)
+    {
+        if (!string.IsNullOrEmpty(value))
+            return Enum.TryParse(value, out tag);
+
+        tag = ChunkTag.Rest;
+        return false;
     }
 
     private float GetSlotTargetDifficultyForGeneratedSlotIndex(int generatedSlotIndex)
@@ -670,14 +1173,14 @@ public class LevelGenerator : MonoBehaviour
         }
     }
 
-    private GameObject SelectNextChunkPrefab(
+    private ChunkSelectionCandidate SelectNextChunkCandidate(
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
         int samePrimaryTagStreak,
         int slotIndex)
     {
-        List<GameObject> candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, true, true);
+        List<ChunkSelectionCandidate> candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, true, true);
 
         if (candidates.Count == 0)
             candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, false, true);
@@ -692,13 +1195,15 @@ public class LevelGenerator : MonoBehaviour
         float slotTargetDifficulty = Mathf.Lerp(startDifficultyBias, targetDifficulty, progress);
         DifficultyBand band = GetDifficultyBand(targetDifficulty);
 
+        candidates = ApplyExtremeOutlierEligibility(candidates, slotTargetDifficulty, targetDifficulty, slotIndex);
+
         float totalWeight = 0f;
         List<float> weights = new List<float>(candidates.Count);
 
         for (int i = 0; i < candidates.Count; i++)
         {
-            ChunkData cd = candidates[i].GetComponent<ChunkData>();
-            if (cd == null)
+            ChunkSelectionCandidate candidate = candidates[i];
+            if (candidate == null || candidate.sourcePrefab == null)
             {
                 weights.Add(0.01f);
                 totalWeight += 0.01f;
@@ -706,7 +1211,7 @@ public class LevelGenerator : MonoBehaviour
             }
 
             float transitionWeight = useTwoStepMarkov
-                ? GetTransitionWeight(prev2, prev1, cd.primaryTag, band)
+                ? GetTransitionWeight(prev2, prev1, candidate.PrimaryTag, band)
                 : 1f;
 
             if (transitionWeight <= 0f)
@@ -716,22 +1221,37 @@ public class LevelGenerator : MonoBehaviour
                 continue;
             }
 
-            float diff = Mathf.Abs(cd.difficultyRating - slotTargetDifficulty);
+            float diff = Mathf.Abs(candidate.Difficulty - slotTargetDifficulty);
             float difficultyWeight = Mathf.Exp(-difficultyPreferenceStrength * diff * diff);
 
             float varietyWeight = 1f;
-            if (cd.primaryTag != prev1)
+            if (candidate.PrimaryTag != prev1)
                 varietyWeight += varietyBonus;
 
             float pacingWeight = 1f;
-            bool isHardType = cd.primaryTag == ChunkTag.Spikes || cd.primaryTag == ChunkTag.Precision;
+            bool isHardType = candidate.PrimaryTag == ChunkTag.Spikes || candidate.PrimaryTag == ChunkTag.Precision;
             if (slotIndex < 2 && isHardType)
                 pacingWeight *= earlyHardPenalty;
 
-            if (cd.difficultyRating > slotTargetDifficulty + 2f)
+            if (candidate.Difficulty > slotTargetDifficulty + 2f)
                 pacingWeight *= 0.65f;
 
-            float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight;
+            float extremeOutlierWeight = GetExtremeOutlierDifficultyWeight(
+                candidate,
+                slotTargetDifficulty,
+                targetDifficulty);
+
+            float transitionPressureWeight = ChunkTransitionPressure.GetSelectionWeightMultiplier(
+                previousPrefabName,
+                prev1,
+                candidate.DisplayName,
+                candidate.PrimaryTag,
+                candidate.Difficulty,
+                slotTargetDifficulty,
+                targetDifficulty);
+
+            float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight *
+                                extremeOutlierWeight * transitionPressureWeight * candidate.sourceFamilyWeight;
             finalWeight = Mathf.Max(0.01f, finalWeight);
 
             weights.Add(finalWeight);
@@ -751,7 +1271,59 @@ public class LevelGenerator : MonoBehaviour
         return candidates[candidates.Count - 1];
     }
 
-    private List<GameObject> GetCandidates(
+    private List<ChunkSelectionCandidate> ApplyExtremeOutlierEligibility(
+        List<ChunkSelectionCandidate> candidates,
+        float slotTargetDifficulty,
+        float levelTargetDifficulty,
+        int slotIndex)
+    {
+        if (candidates == null || candidates.Count == 0)
+            return candidates;
+
+        List<ChunkSelectionCandidate> eligible = new List<ChunkSelectionCandidate>(candidates.Count);
+
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            ChunkSelectionCandidate candidate = candidates[i];
+            if (candidate == null)
+                continue;
+
+            if (!IsExtremeOutlierDisallowed(candidate, slotTargetDifficulty, levelTargetDifficulty, slotIndex))
+                eligible.Add(candidate);
+        }
+
+        return eligible.Count > 0 ? eligible : candidates;
+    }
+
+    private bool IsExtremeOutlierDisallowed(
+        ChunkSelectionCandidate candidate,
+        float slotTargetDifficulty,
+        float levelTargetDifficulty,
+        int slotIndex)
+    {
+        if (candidate == null)
+            return false;
+
+        bool extremeForSlot = candidate.Difficulty >= slotTargetDifficulty + 4f;
+        int lateSlotStart = Mathf.Max(0, totalChunks - 3);
+        bool beforeLateSlots = slotIndex < lateSlotStart;
+        bool extremeEarlyForLevel = levelTargetDifficulty <= 5f && candidate.Difficulty >= 8 && beforeLateSlots;
+
+        return extremeForSlot || extremeEarlyForLevel;
+    }
+
+    private float GetExtremeOutlierDifficultyWeight(ChunkSelectionCandidate candidate, float slotTargetDifficulty, float levelTargetDifficulty)
+    {
+        if (candidate == null)
+            return 1f;
+
+        bool extremeForLevel = levelTargetDifficulty <= 5.5f && candidate.Difficulty >= 8;
+        bool extremeForSlot = candidate.Difficulty >= slotTargetDifficulty + 3f;
+
+        return extremeForLevel || extremeForSlot ? 0.35f : 1f;
+    }
+
+    private List<ChunkSelectionCandidate> GetCandidates(
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
@@ -759,7 +1331,7 @@ public class LevelGenerator : MonoBehaviour
         bool enforceExactRepeatRule,
         bool enforceTagStreakRule)
     {
-        List<GameObject> candidates = new List<GameObject>();
+        List<ChunkSelectionCandidate> candidates = new List<ChunkSelectionCandidate>();
 
         for (int i = 0; i < chunkPrefabs.Length; i++)
         {
@@ -781,10 +1353,94 @@ public class LevelGenerator : MonoBehaviour
             if (enforceTagStreakRule && samePrimaryTagStreak >= maxSamePrimaryTagStreak && cd.primaryTag == prev1)
                 continue;
 
-            candidates.Add(prefab);
+            ChunkSelectionCandidate handcrafted = CreateHandcraftedCandidate(prefab);
+            candidates.Add(handcrafted);
+            AddGeneratedBlueprintCandidatesForSource(candidates, prefab, cd);
         }
 
         return candidates;
+    }
+
+    private void AddGeneratedBlueprintCandidatesForSource(
+        List<ChunkSelectionCandidate> candidates,
+        GameObject sourcePrefab,
+        ChunkData sourceData)
+    {
+        if (candidates == null || sourcePrefab == null || sourceData == null)
+            return;
+
+        if (!CanUseGeneratedBlueprintCandidate(sourceData))
+            return;
+
+        ChunkGenerationRequest request = CreateGenerationRequest(sourcePrefab, sourceData);
+        if (request == null)
+            return;
+
+        int desiredCount = Mathf.Max(1, generatedCandidateVariantsPerSource);
+        int maxAttempts = desiredCount * 4;
+        List<ChunkSelectionCandidate> generated = new List<ChunkSelectionCandidate>(desiredCount);
+        HashSet<string> seenBlueprints = new HashSet<string>();
+
+        for (int attempt = 0; attempt < maxAttempts && generated.Count < desiredCount; attempt++)
+        {
+            ChunkBlueprint blueprint = SimpleChunkBlueprintGenerator.Generate(request);
+            if (blueprint == null)
+                continue;
+
+            string blueprintKey = blueprint.chunkName + "|" + ChunkBlueprintFeatureExtractor.RowsToInlineText(blueprint);
+            if (!seenBlueprints.Add(blueprintKey))
+                continue;
+
+            ChunkBlueprintFeatures features = ChunkBlueprintFeatureExtractor.Analyze(blueprint);
+            ChunkBlueprintValidationResult validation = ChunkBlueprintValidator.Validate(blueprint);
+            if (!validation.isValid)
+                continue;
+
+            if (!IsGeneratedReplacementAcceptable(sourceData, request, blueprint, features, out string rejectionReason))
+                continue;
+
+            generated.Add(new ChunkSelectionCandidate
+            {
+                sourcePrefab = sourcePrefab,
+                blueprint = blueprint,
+                blueprintFeatures = features,
+                validationReason = rejectionReason
+            });
+        }
+
+        if (generated.Count == 0)
+            return;
+
+        float perCandidateWeight = Mathf.Max(0f, generatedCandidateFamilyWeight) / generated.Count;
+        for (int i = 0; i < generated.Count; i++)
+        {
+            generated[i].sourceFamilyWeight = perCandidateWeight;
+            candidates.Add(generated[i]);
+        }
+    }
+
+    private bool CanUseGeneratedBlueprintCandidate(ChunkData cd)
+    {
+        if (!useGeneratedBlueprintChunks) return false;
+        if (!useGeneratedBlueprintCandidateSelection) return false;
+        if (blueprintRuntimeBuilder == null) return false;
+        if (cd == null) return false;
+
+        switch (cd.primaryTag)
+        {
+            case ChunkTag.Gap:
+                return allowGeneratedGap;
+
+            case ChunkTag.Precision:
+                return allowGeneratedPrecision && IsElevatedPlatformPrecisionSource(cd);
+
+            case ChunkTag.Safe:
+            case ChunkTag.Rest:
+                return allowGeneratedSafeRest;
+
+            default:
+                return false;
+        }
     }
 
     private bool IsHardConstraintAllowed(ChunkTag prev2, ChunkTag prev1, ChunkTag next)
@@ -1171,6 +1827,10 @@ public class LevelGenerator : MonoBehaviour
         public bool replacementAttempted;
         public bool replacementSucceeded;
         public string replacementMode;
+        public string replacementReason;
+        public string generatedRejectionReason;
         public string generatedBlueprintName;
+        public string generatedBlueprintRows;
+        public ChunkBlueprintFeatures generatedBlueprintFeatures;
     }
 }
