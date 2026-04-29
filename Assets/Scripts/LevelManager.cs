@@ -95,6 +95,7 @@ public class LevelManager : MonoBehaviour
 
     [Header("Debug HUD")]
     [SerializeField] private bool showHud = true;
+    [SerializeField] private bool advancedHud = true;
 
     // Debug info for the most recently completed level
     private float lastDeathsPerChunk = 0f;
@@ -127,6 +128,8 @@ public class LevelManager : MonoBehaviour
     private int cleanRunStreak = 0;
     private bool hasRecentStrainScore = false;
     private float recentStrainScore = 0f;
+    private bool gameplayStarted = false;
+    private int sessionLevelNumber = 0;
 
     private void Awake()
     {
@@ -162,11 +165,14 @@ public class LevelManager : MonoBehaviour
 
         EnsureBehaviourTracker();
 
-        GenerateFreshLevel();
+        ShowStartMenu();
     }
 
     private void Update()
     {
+        if (!gameplayStarted)
+            return;
+
         if (!waitingForNextLevelChoice)
         {
             levelTimer += Time.deltaTime;
@@ -188,6 +194,7 @@ public class LevelManager : MonoBehaviour
 
     public void OnPlayerDied(ChunkData chunk, string source)
     {
+        if (!gameplayStarted) return;
         if (waitingForNextLevelChoice) return;
 
         if (chunk == null && player != null && levelGenerator != null)
@@ -245,6 +252,7 @@ public class LevelManager : MonoBehaviour
 
     public void OnLevelCompleted()
     {
+        if (!gameplayStarted) return;
         if (waitingForNextLevelChoice) return;
 
         int chunkCount = Mathf.Max(1, levelGenerator.ChunkCountThisLevel);
@@ -325,11 +333,47 @@ public class LevelManager : MonoBehaviour
         }
     }
 
+    public void StartGameFromMenu(float startingTargetDifficulty, bool showAdvancedStats)
+    {
+        gameplayStarted = true;
+        advancedHud = showAdvancedStats;
+        sessionLevelNumber = 0;
+        cleanRunStreak = 0;
+        hasRecentStrainScore = false;
+        recentStrainScore = 0f;
+
+        if (levelGenerator != null)
+            levelGenerator.targetDifficulty = Mathf.Clamp(startingTargetDifficulty, minTargetDifficulty, maxTargetDifficulty);
+
+        GenerateFreshLevel();
+    }
+
+    private void ShowStartMenu()
+    {
+        gameplayStarted = false;
+        waitingForNextLevelChoice = false;
+        Time.timeScale = 0f;
+        ResetStats();
+
+        if (levelGenerator != null)
+            levelGenerator.ClearLevel();
+
+        GameUIManager uiManager = FindFirstObjectByType<GameUIManager>();
+        if (uiManager == null)
+        {
+            GameObject uiObject = new GameObject("Game UI Manager");
+            uiManager = uiObject.AddComponent<GameUIManager>();
+        }
+
+        uiManager.Initialize(this);
+    }
+
     private void GenerateFreshLevel()
     {
         Time.timeScale = 1f;
         waitingForNextLevelChoice = false;
         currentGeneratedLevelAlreadyLogged = false;
+        sessionLevelNumber++;
 
         levelGenerator.ClearLevel();
         levelGenerator.GenerateLevel();
@@ -753,6 +797,13 @@ public class LevelManager : MonoBehaviour
     private void OnGUI()
     {
         if (!showHud || levelGenerator == null) return;
+        if (!gameplayStarted) return;
+
+        if (!advancedHud)
+        {
+            DrawCompactHud();
+            return;
+        }
 
         const float pad = 10f;
         Rect r = new Rect(pad, pad, 620f, waitingForNextLevelChoice ? 450f : 370f);
@@ -761,6 +812,7 @@ public class LevelManager : MonoBehaviour
         float shownDelta = shownActual - levelGenerator.targetDifficulty;
 
         string text =
+            $"Level: {sessionLevelNumber}\n" +
             $"Level Time: {levelTimer:F2}s\n" +
             $"Deaths: {deathsThisLevel}\n\n" +
             $"Current Target Difficulty: {levelGenerator.targetDifficulty:F2}\n" +
@@ -787,6 +839,37 @@ public class LevelManager : MonoBehaviour
         }
 
         GUI.Box(r, text);
+    }
+
+    private void DrawCompactHud()
+    {
+        const float pad = 10f;
+        Rect r = new Rect(pad, pad, 280f, waitingForNextLevelChoice ? 150f : 110f);
+
+        string text =
+            $"Level: {sessionLevelNumber}\n" +
+            $"Difficulty: {GetDifficultyBandLabel(levelGenerator.targetDifficulty)}\n" +
+            $"Deaths: {deathsThisLevel}\n" +
+            $"Time: {levelTimer:F1}s";
+
+        if (waitingForNextLevelChoice)
+        {
+            text += $"\n\nLevel Complete" +
+                    $"\nEnter: Next   R: Replay";
+        }
+
+        GUI.Box(r, text);
+    }
+
+    private string GetDifficultyBandLabel(float targetDifficulty)
+    {
+        if (targetDifficulty < 4.5f)
+            return "Easy";
+
+        if (targetDifficulty > 6f)
+            return "Hard";
+
+        return "Medium";
     }
 
     private void OnDisable()
