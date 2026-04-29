@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
@@ -121,7 +122,10 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         sb.AppendLine($"varietyBonus: {generator.varietyBonus:0.##}");
         sb.AppendLine($"earlyHardPenalty: {generator.earlyHardPenalty:0.##}");
         sb.AppendLine($"useGeneratedBlueprintChunks: {generator.useGeneratedBlueprintChunks}");
+        sb.AppendLine($"useGeneratedBlueprintCandidateSelection: {generator.useGeneratedBlueprintCandidateSelection}");
         sb.AppendLine($"generatedChunkReplacementChance: {generator.generatedChunkReplacementChance:0.##}");
+        sb.AppendLine($"generatedCandidateVariantsPerSource: {generator.generatedCandidateVariantsPerSource}");
+        sb.AppendLine($"generatedCandidateFamilyWeight: {generator.generatedCandidateFamilyWeight:0.##}");
         sb.AppendLine($"allowGeneratedGap: {generator.allowGeneratedGap}");
         sb.AppendLine($"allowGeneratedPrecision: {generator.allowGeneratedPrecision}");
         sb.AppendLine($"allowGeneratedVertical: {generator.allowGeneratedVertical}");
@@ -385,10 +389,10 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             int seed = SequenceSampleBaseSeed + runIndex;
             UnityEngine.Random.InitState(seed);
 
-            List<GameObject> sequence = null;
+            IList sequence = null;
             try
             {
-                sequence = buildFreshSequence.Invoke(generator, null) as List<GameObject>;
+                sequence = buildFreshSequence.Invoke(generator, null) as IList;
             }
             catch (Exception ex)
             {
@@ -402,7 +406,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             }
 
             int startOffset = 0;
-            if (hasFixedStartingChunk && sequence.Count > 0 && sequence[0] == generator.startingChunkPrefab)
+            if (hasFixedStartingChunk && sequence.Count > 0 && GetCandidateSourcePrefab(sequence[0]) == generator.startingChunkPrefab)
             {
                 startOffset = 1;
             }
@@ -418,36 +422,37 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             for (int i = startOffset; i < sequence.Count; i++)
             {
                 int generatedSlotIndex = i - startOffset;
-                GameObject prefab = sequence[i];
-                ChunkData data = prefab != null ? prefab.GetComponent<ChunkData>() : null;
+                object candidate = sequence[i];
+                GameObject prefab = GetCandidateSourcePrefab(candidate);
                 float slotTargetDifficulty = GetSlotTargetDifficulty(generator, generatedSlotIndex);
-                int selectedDifficulty = data != null ? data.difficultyRating : -1;
-                string selectedChunkName = prefab != null ? prefab.name : "<null>";
-                string selectedPrimaryTag = data != null ? data.primaryTag.ToString() : "Unknown";
-                float delta = data != null ? data.difficultyRating - slotTargetDifficulty : 0f;
-                GameObject previousPrefab = i > 0 ? sequence[i - 1] : null;
-                ChunkData previousData = previousPrefab != null ? previousPrefab.GetComponent<ChunkData>() : null;
-                string previousChunkName = previousPrefab != null ? previousPrefab.name : "<none>";
+                int selectedDifficulty = GetCandidateDifficulty(candidate);
+                string selectedChunkName = GetCandidateDisplayName(candidate);
+                ChunkTag selectedTag = GetCandidatePrimaryTag(candidate);
+                string selectedPrimaryTag = selectedTag.ToString();
+                float delta = selectedDifficulty >= 0 ? selectedDifficulty - slotTargetDifficulty : 0f;
+                object previousCandidate = i > 0 ? sequence[i - 1] : null;
+                string previousChunkName = GetCandidateDisplayName(previousCandidate);
+                ChunkTag previousTag = GetCandidatePrimaryTag(previousCandidate);
                 float transitionPressureMultiplier = 1f;
                 string transitionPressureReason = "none";
 
-                if (data != null && previousData != null)
+                if (candidate != null && previousCandidate != null)
                 {
                     transitionPressureMultiplier = ChunkTransitionPressure.GetSelectionWeightMultiplier(
                         previousChunkName,
-                        previousData.primaryTag,
+                        previousTag,
                         selectedChunkName,
-                        data.primaryTag,
-                        data.difficultyRating,
+                        selectedTag,
+                        selectedDifficulty,
                         slotTargetDifficulty,
                         generator.targetDifficulty);
 
                     transitionPressureReason = ChunkTransitionPressure.GetTransitionReason(
                         previousChunkName,
-                        previousData.primaryTag,
+                        previousTag,
                         selectedChunkName,
-                        data.primaryTag,
-                        data.difficultyRating,
+                        selectedTag,
+                        selectedDifficulty,
                         slotTargetDifficulty,
                         generator.targetDifficulty);
                 }
@@ -493,7 +498,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         sb.AppendLine($"expectedGeneratedSlotsPerRun: {expectedGeneratedSlots}");
         sb.AppendLine($"startingChunkPrefab: {AssetPath(generator.startingChunkPrefab)}");
         sb.AppendLine("slotTargetComparisonExcludesFixedStartingChunk: true");
-        sb.AppendLine("sequenceSamplingReflectsHandcraftedSelectionOnly: true");
+        sb.AppendLine($"sequenceSamplingIncludesGeneratedBlueprintCandidates: {generator.useGeneratedBlueprintCandidateSelection}");
         sb.AppendLine();
     }
 
@@ -1241,6 +1246,45 @@ public class ChunkCalibrationReporterWindow : EditorWindow
     {
         float progress = Mathf.Clamp01((generatedSlotIndex + 1f) / Mathf.Max(1, generator.totalChunks - 1));
         return Mathf.Lerp(generator.startDifficultyBias, generator.targetDifficulty, progress);
+    }
+
+    private static GameObject GetCandidateSourcePrefab(object candidate)
+    {
+        if (candidate == null)
+            return null;
+
+        FieldInfo field = candidate.GetType().GetField("sourcePrefab", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return field != null ? field.GetValue(candidate) as GameObject : null;
+    }
+
+    private static string GetCandidateDisplayName(object candidate)
+    {
+        if (candidate == null)
+            return "<none>";
+
+        PropertyInfo property = candidate.GetType().GetProperty("DisplayName", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        object value = property != null ? property.GetValue(candidate, null) : null;
+        return value as string ?? "<unknown>";
+    }
+
+    private static ChunkTag GetCandidatePrimaryTag(object candidate)
+    {
+        if (candidate == null)
+            return ChunkTag.Rest;
+
+        PropertyInfo property = candidate.GetType().GetProperty("PrimaryTag", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        object value = property != null ? property.GetValue(candidate, null) : null;
+        return value is ChunkTag ? (ChunkTag)value : ChunkTag.Rest;
+    }
+
+    private static int GetCandidateDifficulty(object candidate)
+    {
+        if (candidate == null)
+            return -1;
+
+        PropertyInfo property = candidate.GetType().GetProperty("Difficulty", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        object value = property != null ? property.GetValue(candidate, null) : null;
+        return value is int ? (int)value : -1;
     }
 
     private static Dictionary<int, SequenceSlotAggregate> BuildSlotAggregates(List<SequenceSlotSample> slotSamples)

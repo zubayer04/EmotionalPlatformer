@@ -84,6 +84,20 @@ def effective_chunk_difficulty(slot: dict[str, Any]) -> float | None:
     return None
 
 
+def selected_candidate_type(slot: dict[str, Any]) -> str:
+    value = slot.get("selectedCandidateType")
+    if value:
+        return str(value)
+    return "legacy_or_handcrafted"
+
+
+def selected_source_name(slot: dict[str, Any]) -> str:
+    value = slot.get("selectedSourcePrefabName")
+    if value:
+        return str(value)
+    return slot.get("selectedPrefabName") or "Unknown"
+
+
 def format_summary_line(run: dict[str, Any]) -> str:
     adaptation = run.get("adaptation", {}) or {}
     target = run.get("targetDifficultyBeforeRun")
@@ -168,6 +182,8 @@ def slot_rows_for_table(slots: Iterable[dict[str, Any]]) -> list[list[str]]:
                 str(slot.get("generatedSlotIndex", "-")),
                 fmt_num(slot_target),
                 slot.get("selectedPrefabName", "-") or "-",
+                selected_candidate_type(slot),
+                selected_source_name(slot),
                 fmt_num(slot.get("selectedDifficulty"), 0),
                 slot.get("spawnedChunkName", "-") or "-",
                 fmt_num(slot.get("spawnedDifficulty"), 0),
@@ -210,6 +226,8 @@ def print_latest_slot_table(run: dict[str, Any]) -> None:
         "gen",
         "target",
         "selected",
+        "candType",
+        "source",
         "selDiff",
         "spawned",
         "spnDiff",
@@ -234,7 +252,9 @@ def selected_vs_spawned_mismatches(slots: Iterable[dict[str, Any]]) -> list[str]
         if not selected_name or not spawned_name:
             continue
 
-        name_changed = selected_name != spawned_name
+        generated_candidate = selected_candidate_type(slot) == "generated_blueprint"
+        generated_name_match = generated_candidate and str(spawned_name).startswith(str(selected_name))
+        name_changed = selected_name != spawned_name and not generated_name_match
         diff_changed = (
             isinstance(selected_diff, (int, float))
             and isinstance(spawned_diff, (int, float))
@@ -573,6 +593,8 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     )
 
     selected_counter: Counter[str] = Counter()
+    selected_candidate_type_counter: Counter[str] = Counter()
+    selected_source_counter: Counter[str] = Counter()
     replaced_counter: Counter[str] = Counter()
     replacement_reason_counter: Counter[str] = Counter()
     rejection_reason_counter: Counter[str] = Counter()
@@ -589,6 +611,8 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         adaptation_counter[adaptation.get("decisionCode", "unknown") or "unknown"] += 1
         for slot in run.get("slots", []) or []:
             selected_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
+            selected_candidate_type_counter[selected_candidate_type(slot)] += 1
+            selected_source_counter[selected_source_name(slot)] += 1
             if slot.get("replacementMode") and slot.get("replacementMode") != "none":
                 replaced_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
                 replacement_reason_counter[slot.get("replacementReason", "unknown") or "unknown"] += 1
@@ -609,6 +633,8 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
             death_chunk_counter[event.get("chunkName", "Unknown") or "Unknown"] += 1
 
     print_top_counter("Most selected chunks", selected_counter, 5)
+    print_top_counter("Selected candidate types", selected_candidate_type_counter, 5)
+    print_top_counter("Most selected source families", selected_source_counter, 5)
     print_top_counter("Most replaced selected chunks", replaced_counter, 5)
     print_top_counter("Replacement reasons", replacement_reason_counter, 5)
     print_top_counter("Generated acceptance/rejection reasons", rejection_reason_counter, 5)

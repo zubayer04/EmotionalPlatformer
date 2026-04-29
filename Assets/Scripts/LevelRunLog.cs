@@ -22,7 +22,10 @@ public static class LevelRunLog
         public float difficultyPreferenceStrength;
         public bool useTwoStepMarkov;
         public bool useGeneratedBlueprintChunks;
+        public bool useGeneratedBlueprintCandidateSelection;
         public float generatedChunkReplacementChance;
+        public int generatedCandidateVariantsPerSource;
+        public float generatedCandidateFamilyWeight;
         public int totalChunksConfigured;
         public int chunkCountThisLevel;
 
@@ -54,6 +57,9 @@ public static class LevelRunLog
         public float slotTargetDifficulty;
 
         public string selectedPrefabName;
+        public string selectedCandidateType;
+        public string selectedSourcePrefabName;
+        public string selectedGeneratedBlueprintName;
         public string selectedPrimaryTag;
         public int selectedDifficulty = -1;
         public bool selectedHasHazard;
