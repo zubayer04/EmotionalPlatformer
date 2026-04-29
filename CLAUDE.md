@@ -19,11 +19,18 @@ Final-year BSc Computer Science project: a Unity 2D platformer with emotionally 
 ### Level Generation Pipeline
 
 1. **LevelGenerator** orchestrates chunk sequencing using a 2-step Markov chain with weighted selection:
-   - Transition weights (Markov state) × difficulty closeness (Gaussian) × variety bonus × pacing weight
+   - `MarkovWeightTable.GetWeight(prev2, prev1, next, band)` × difficulty closeness (Gaussian) × variety bonus × pacing weight
    - Hard constraints: no Spikes→Spikes, no Precision→Precision, no 3× Vertical streak
+   - `DifficultyBand` (Low ≤3.5, Medium ≤6.5, High >6.5) gates which Markov weights apply
    - Optionally injects runtime-generated blueprint chunks alongside handcrafted prefabs
 
-2. **ChunkBlueprint system** (procedural chunk generation):
+2. **MarkovWeightTable** (online learning, `Assets/Scripts/MarkovWeightTable.cs`):
+   - Stores both hand-tuned `baselineWeights` and live `learnedWeights` (keyed on prev2/prev1/next/band)
+   - `UpdateWeight()` nudges learned weights toward quality signal; `DecayTowardBaseline()` prevents drift
+   - Persists to `{persistentDataPath}/MarkovWeights/learned_weights.json` via `TrySave`/`TryLoad`
+   - `ResetToBaseline()` wipes learned weights back to hand-tuned starting point
+
+3. **ChunkBlueprint system** (procedural chunk generation):
    - `ChunkBlueprint` — grid-based chunk representation (rows of characters)
    - `SimpleChunkBlueprintGenerator` — creates blueprint variants from templates
    - `ChunkBlueprintValidator` / `ChunkBlueprintValidationResult` — validates structural correctness
@@ -31,30 +38,39 @@ Final-year BSc Computer Science project: a Unity 2D platformer with emotionally 
    - `ChunkBlueprintFeatureExtractor` — derives metadata (difficulty, tags) from blueprint structure
    - `RealChunkBlueprintLibrary` — provides source blueprints derived from actual prefabs
 
-3. **Adaptive Difficulty Loop** (LevelManager + AdaptiveDifficultyController):
-   - `LevelManager` tracks deaths, time, per-chunk stats during play
-   - After each level, `AdaptiveDifficultyController` (pure static logic) computes a difficulty adjustment decision
-   - Decision uses deathsPerChunk, timePerChunk, clean-run streaks, strain smoothing
-   - Adjusts `targetDifficulty` on `LevelGenerator` for the next level
+4. **Adaptive Difficulty Loop** (`LevelManager` → `AdaptiveDifficultyController`):
+   - `LevelManager` collects deaths, time, and a `BehaviourSummary` from `PlayerBehaviourTracker` each level
+   - `AdaptiveDifficultyController.Evaluate(Input)` is pure static logic returning a `Decision` struct
+   - Strain formula: classic strain (deaths + time, 60%) blended with behavioural strain (40%)
+   - Behavioural strain sources: hesitation score, momentum fluidity, direction-reversal rate, retry delay, death-clustering ratio
+   - Decision codes: `decrease_high_strain`, `decrease_content_overshoot`, `increase_low_strain_undershoot`, `increase_clean_streak`, `keep_*`
+   - Adjusts `targetDifficulty` on `LevelGenerator` for next level; clamped to `[minTargetDifficulty, maxTargetDifficulty]`
 
-4. **ChunkData** (MonoBehaviour on each chunk prefab): stores primaryTag, difficultyRating, entry/exit transforms, hazard info
+5. **PlayerBehaviourTracker** (`Assets/Scripts/PlayerBehaviourTracker.cs`):
+   - Runs in `FixedUpdate`; accumulates per-chunk and per-level motion stats from `Rigidbody2D`
+   - Signals: `hesitationScore` (grounded near-stationary fraction), `momentumFluidity` (avg |vx|/maxSpeed), `directionReversalRate` (sign flips/s), `avgRetryDelay` (respawn→input latency), `deathClusteringRatio`
+   - `BehaviourSummary.EngagementScore()` is a weighted composite (0–1); logged to JSONL
 
-5. **ChunkTransitionPressure** — scores difficulty of transitions between consecutive chunks
+6. **ChunkData** (MonoBehaviour on each chunk prefab): stores primaryTag, difficultyRating, entry/exit transforms, hazard info
+
+7. **ChunkTransitionPressure** — scores difficulty of transitions between consecutive chunks
 
 ### Key Data Flow
 
 ```
-LevelManager (game loop, stats) 
-  → AdaptiveDifficultyController (pure decision logic)
+PlayerBehaviourTracker (FixedUpdate motion signals)
+  → BehaviourSummary (per-level aggregate)
+  → AdaptiveDifficultyController.Evaluate() (pure decision logic, blends classic + behavioural strain)
   → LevelGenerator.targetDifficulty (next level's target)
-  → LevelGenerator.GenerateLevel() (Markov sequencing + blueprint injection)
+  → LevelGenerator.GenerateLevel() (Markov sequencing via MarkovWeightTable + blueprint injection)
   → Instantiated chunk GameObjects with ChunkData
+  → (post-level) MarkovWeightTable.UpdateWeight() / DecayTowardBaseline()
 ```
 
 ### Logging & Instrumentation
 
-- `LevelRunLog` writes JSONL records (schema v6) to persistent data path after each level
-- Records include: slot-level chunk details, death events, adaptation decisions, transition pressure
+- `LevelRunLog` writes JSONL records (schema v7) to persistent data path after each level
+- Records include: slot-level chunk details, death events, adaptation decisions, transition pressure, `BehaviourSummary` fields, engagement score
 - `tools/analyze_run_logs.py` summarizes logs for calibration review
 
 ### Chunk Prefabs
@@ -70,8 +86,17 @@ LevelManager (game loop, stats)
 - When changing code: explain how to test in Unity, side effects, and dissertation relevance
 - `ChunkTag` enum: Safe, Gap, Spikes, Vertical, Precision, Rest
 - Difficulty ratings are int 0–10 on ChunkData
+- `DifficultyBand` thresholds: Low ≤3.5, Medium ≤6.5, High >6.5 — changing these shifts all Markov weight lookups
+
+## Known Design Gaps
+
+- No `Rest` chunk prefab exists despite `ChunkTag.Rest` being used in Markov tables
+- `MarkovWeightTable.UpdateWeight()` is wired but the call site (quality signal computation after each level) is the key research question — what makes a good quality signal?
+- `BehaviourSummary` engagement weights and strain weights in `AdaptiveDifficultyController` are empirical; not calibrated from data yet
+- No persistent player profile across sessions (learned Markov weights persist, but `targetDifficulty` resets)
+- `LevelDifficultyScore` is computed post-generation — no lookahead or rejection/retry
 
 ## Branch Context
 
 - `main` — stable branch
-- `speculative-strengthening` — current feature branch for strengthening the adaptive/generation systems
+- `emotional-signals-learning` — current branch; adds `PlayerBehaviourTracker`, `BehaviourSummary`, online `MarkovWeightTable` learning, and behavioural strain signals to `AdaptiveDifficultyController`

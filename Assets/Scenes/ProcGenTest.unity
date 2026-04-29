@@ -368,8 +368,11 @@ MonoBehaviour:
   endPointOffset: {x: 0, y: 0, z: 0}
   clearBeforeGenerate: 1
   useGeneratedBlueprintChunks: 1
+  useGeneratedBlueprintCandidateSelection: 1
   blueprintRuntimeBuilder: {fileID: 672173401}
   generatedChunkReplacementChance: 0.5
+  generatedCandidateVariantsPerSource: 2
+  generatedCandidateFamilyWeight: 0.75
   allowGeneratedGap: 1
   allowGeneratedPrecision: 1
   allowGeneratedVertical: 0
@@ -385,8 +388,8 @@ MonoBehaviour:
   earlyHardPenalty: 0.5
   wAvgDifficulty: 1
   wHazardChunk: 0.75
-  wEstimatedJump: 0.15
-  wVerticalChunk: 0.35
+  wEstimatedJump: 0.1
+  wVerticalChunk: 0.25
   clampMaxScore: 10
 --- !u!4 &665513357
 Transform:
@@ -682,13 +685,16 @@ MonoBehaviour:
   levelGenerator: {fileID: 665513356}
   playerSpawnPoint: {fileID: 687720791}
   player: {fileID: 1804219915}
+  behaviourTracker: {fileID: 0}
+  markovLearningRate: 0.05
+  markovDecayRate: 0.02
   killZoneTransform: {fileID: 573772443}
   killZonePaddingBelowGround: 6
   killZoneExtraWidth: 20
   killZoneExtraBeyondEnds: 30
   deathsThisLevel: 0
   levelTimer: 0
-  adaptiveDifficultyEnabled: 1
+  adaptiveDifficultyEnabled: 0
   minTargetDifficulty: 1
   maxTargetDifficulty: 9
   targetDifficultyStep: 0.5
@@ -704,6 +710,7 @@ MonoBehaviour:
   continueKey: 32
   replayKey: 114
   showHud: 1
+  advancedHud: 1
 --- !u!4 &1449064385
 Transform:
   m_ObjectHideFlags: 0
@@ -1201,7 +1208,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GeneratedChunkBuildTester
   builder: {fileID: 672173401}
-  sourceChunkPrefab: {fileID: 2051000984010779093, guid: 3f2125a7070b74a139c1cd47ae6e19f7, type: 3}
+  sourceChunkPrefab: {fileID: 8418884132628795399, guid: 88dc2cbf877974e4e96eea3604076428, type: 3}
   request:
     requestedPrimaryTag: 3
     targetDifficulty: 2
