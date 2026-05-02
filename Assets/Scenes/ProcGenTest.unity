@@ -379,6 +379,9 @@ MonoBehaviour:
   allowGeneratedSpikes: 0
   allowGeneratedSafeRest: 1
   useTwoStepMarkov: 1
+  useLookaheadSequencePlanning: 1
+  lookaheadDepth: 2
+  lookaheadBeamWidth: 4
   avoidSamePrefabBackToBack: 1
   maxSamePrimaryTagStreak: 2
   targetDifficulty: 5
@@ -700,7 +703,7 @@ MonoBehaviour:
   killZoneExtraBeyondEnds: 30
   deathsThisLevel: 0
   levelTimer: 0
-  adaptiveDifficultyEnabled: 0
+  adaptiveDifficultyEnabled: 1
   minTargetDifficulty: 1
   maxTargetDifficulty: 9
   targetDifficultyStep: 0.5
@@ -987,7 +990,7 @@ Camera:
   far clip plane: 1000
   field of view: 60
   orthographic: 1
-  orthographic size: 5.6998553
+  orthographic size: 5.625
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2

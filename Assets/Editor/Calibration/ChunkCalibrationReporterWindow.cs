@@ -26,7 +26,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
     {
         EditorGUILayout.LabelField("Chunk Calibration Reporter", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
-            "Read-only audit for chunk metadata, generated gap/precision samples, and replacement equivalence. No assets are saved or modified.",
+            "Read-only audit for chunk metadata, generated blueprint samples, and runtime generated-candidate equivalence. No assets are saved or modified.",
             MessageType.Info);
 
         using (new EditorGUILayout.HorizontalScope())
@@ -114,6 +114,9 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         }
 
         sb.AppendLine($"useTwoStepMarkov: {generator.useTwoStepMarkov}");
+        sb.AppendLine($"useLookaheadSequencePlanning: {generator.useLookaheadSequencePlanning}");
+        sb.AppendLine($"lookaheadDepth: {generator.lookaheadDepth}");
+        sb.AppendLine($"lookaheadBeamWidth: {generator.lookaheadBeamWidth}");
         sb.AppendLine($"avoidSamePrefabBackToBack: {generator.avoidSamePrefabBackToBack}");
         sb.AppendLine($"maxSamePrimaryTagStreak: {generator.maxSamePrimaryTagStreak}");
         sb.AppendLine($"targetDifficulty: {generator.targetDifficulty:0.##}");
@@ -142,7 +145,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
     private static void AppendHandcraftedChunkMetadata(StringBuilder sb, List<ChunkRecord> chunks)
     {
         sb.AppendLine("## Handcrafted Chunk Metadata");
-        sb.AppendLine("Role | Path | Name | Primary | Tags | Difficulty | Hazard | Jumps | ExitDelta | Replacement Eligible");
+        sb.AppendLine("Role | Path | Name | Primary | Tags | Difficulty | Hazard | Jumps | ExitDelta | Generated Candidate Eligible");
         sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
 
         if (chunks.Count == 0)
@@ -236,16 +239,16 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             if (!validation.isValid)
                 warnings.Add($"{title}: {blueprint.chunkName} at requested difficulty {difficulty} is invalid.");
 
-            if (tag == ChunkTag.Precision && blueprint.difficultyRating != difficulty)
-            {
-                string prefix = replacementActive ? "Generated precision sample" : "Inactive generated precision sample";
-                warnings.Add($"{prefix} requested {difficulty} but reports difficulty {blueprint.difficultyRating}.");
-            }
-
             sb.AppendLine(
                 $"{difficulty} | {blueprint.chunkName} | {blueprint.difficultyRating} | {blueprint.width} | {blueprint.height} | " +
                 $"{TagsToText(blueprint.tags)} | {blueprint.hasHazard} | {blueprint.estimatedJumps} | " +
                 $"{features.gapCount} | {features.maxGapWidth} | {features.minLandingWidth} | {validationText} | {RowsToInlineText(blueprint.rows)}");
+        }
+
+        if (tag == ChunkTag.Precision)
+        {
+            sb.AppendLine();
+            sb.AppendLine("_Note: these are source-free precision blueprint samples. Runtime precision candidate selection is source-restricted and is checked in the Potential Generated Candidate Equivalence section, so template difficulty clamping here is informational rather than a runtime failure._");
         }
 
         sb.AppendLine();
@@ -257,7 +260,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         List<ChunkRecord> chunks,
         List<string> warnings)
     {
-        sb.AppendLine("## Potential Replacement Equivalence");
+        sb.AppendLine("## Potential Generated Candidate Equivalence");
         sb.AppendLine("Source | SourceTag | SourceDiff | SourceJumps | SourceHazard | SourceExitDelta | SourceMaxGap | Generated | GeneratedDiff | GeneratedJumps | GeneratedHazard | GeneratedWidth | GeneratedEstimatedExitDelta | GapCount | MaxGapWidth | LandingWidth | DiffDelta | Status | Reason");
         sb.AppendLine("--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
         int replacementReviewCount = 0;
@@ -306,7 +309,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             if (generated == null)
             {
                 sb.AppendLine($"{source.name} | {source.primaryTag} | {source.difficultyRating} | {source.estimatedJumps} | {source.hasHazard} | ({source.exitDelta.x:0.##}, {source.exitDelta.y:0.##}) | <null> | - | - | - | - | - | Mismatch | Generator returned null");
-                warnings.Add($"Replacement equivalence: generator returned null for {source.name}.");
+                warnings.Add($"Generated candidate equivalence: generator returned null for {source.name}.");
                 continue;
             }
 
@@ -346,7 +349,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             if (status != "Equivalent")
             {
                 replacementReviewCount++;
-                warnings.Add($"Replacement equivalence: {source.name} -> {generated.chunkName}: {reason}.");
+                warnings.Add($"Generated candidate equivalence: {source.name} -> {generated.chunkName}: {reason}.");
             }
 
             sb.AppendLine(
@@ -357,7 +360,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
         }
 
         sb.AppendLine();
-        sb.AppendLine($"Replacement Review Count: {replacementReviewCount}");
+        sb.AppendLine($"Generated Candidate Review Count: {replacementReviewCount}");
         sb.AppendLine();
     }
 

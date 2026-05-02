@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 8;
+    public const int SchemaVersion = 9;
 
     [Serializable]
     public class RunRecord
@@ -21,6 +21,9 @@ public static class LevelRunLog
         public float startDifficultyBias;
         public float difficultyPreferenceStrength;
         public bool useTwoStepMarkov;
+        public bool useLookaheadSequencePlanning;
+        public int lookaheadDepth;
+        public int lookaheadBeamWidth;
         public bool useGeneratedBlueprintChunks;
         public bool useGeneratedBlueprintCandidateSelection;
         public float generatedChunkReplacementChance;
@@ -65,6 +68,11 @@ public static class LevelRunLog
         public bool selectedHasHazard;
         public int selectedEstimatedJumps;
         public Vector2 selectedExitDelta;
+        public bool lookaheadUsed;
+        public int lookaheadDepthUsed;
+        public float lookaheadBestScore;
+        public float lookaheadSelectionWeight;
+        public string lookaheadDecisionSummary;
 
         public bool spawnSucceeded;
         public string spawnedChunkName;

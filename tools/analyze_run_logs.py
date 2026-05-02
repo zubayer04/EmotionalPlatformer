@@ -98,6 +98,13 @@ def selected_source_name(slot: dict[str, Any]) -> str:
     return slot.get("selectedPrefabName") or "Unknown"
 
 
+def is_generated_blueprint_slot(slot: dict[str, Any]) -> bool:
+    return (
+        selected_candidate_type(slot) == "generated_blueprint"
+        or slot.get("replacementMode") == "generated_candidate"
+    )
+
+
 def behaviour_field(run: dict[str, Any], field: str) -> Any:
     adaptation = run.get("adaptation", {}) or {}
     return adaptation.get(field)
@@ -174,6 +181,13 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
         f"high={run.get('highPressureTransitionCount', 0)} | "
         f"score={fmt_num(run.get('transitionPressureScore'))}"
     )
+    if "useLookaheadSequencePlanning" in run:
+        lookahead_slots = sum(1 for slot in run.get("slots", []) or [] if slot.get("lookaheadUsed"))
+        print(
+            f"Lookahead Sequencing: enabled={run.get('useLookaheadSequencePlanning')} | "
+            f"depth={run.get('lookaheadDepth', '-')} | beam={run.get('lookaheadBeamWidth', '-')} | "
+            f"used slots={lookahead_slots}"
+        )
     print(
         f"Adaptation: {adaptation.get('decisionCode', '-') or '-'} | "
         f"{adaptation.get('decisionText', '-') or '-'} | "
@@ -271,9 +285,9 @@ def print_latest_slot_table(run: dict[str, Any]) -> None:
         "spawned",
         "spnDiff",
         "delta",
-        "replace",
-        "reason",
-        "accept/reject",
+        "genMode",
+        "genReason",
+        "validation",
         "pressure",
         "pressureReason",
         "deaths",
@@ -577,6 +591,24 @@ def print_calibration_evaluation(runs: list[dict[str, Any]]) -> None:
         for slot in run.get("slots", []) or []
         if slot.get("replacementSucceeded")
     )
+    generated_slots = [
+        slot
+        for run in runs
+        for slot in run.get("slots", []) or []
+        if is_generated_blueprint_slot(slot)
+    ]
+    total_slots = sum(len(run.get("slots", []) or []) for run in runs)
+
+    if generated_slots:
+        generated_ratio = (len(generated_slots) / total_slots * 100.0) if total_slots else 0.0
+        print(
+            f"Generated candidate selection: selected={len(generated_slots)}/{total_slots} slots "
+            f"({generated_ratio:.1f}%). Generated modes and validation fields describe blueprint "
+            "candidate-pool selection, not runtime failures."
+        )
+    else:
+        print("Generated candidate selection: no generated blueprint candidates selected in these logs.")
+
     if attempted > 0:
         avg_replacement_delta = (
             sum(replacement_deltas) / len(replacement_deltas) if replacement_deltas else None
@@ -587,12 +619,10 @@ def print_calibration_evaluation(runs: list[dict[str, Any]]) -> None:
             else None
         )
         print(
-            f"Replacement stability: attempted={attempted} | succeeded={succeeded} | "
+            f"Legacy post-selection replacement check: attempted={attempted} | succeeded={succeeded} | "
             f"avg diff shift={fmt_num(avg_replacement_delta)} | "
             f"avg abs diff shift={fmt_num(avg_abs_replacement_delta)}"
         )
-    else:
-        print("Replacement stability: no generated replacement attempts in these logs.")
 
     audit_messages = adaptation_audit_messages(runs)
     print("Adaptation audit:")
@@ -634,6 +664,19 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     )
     total_pressure_count = sum(int(run.get("transitionPressureCount", 0) or 0) for run in runs)
     total_high_pressure_count = sum(int(run.get("highPressureTransitionCount", 0) or 0) for run in runs)
+    lookahead_enabled_count = sum(1 for run in runs if run.get("useLookaheadSequencePlanning") is True)
+    lookahead_slot_count = sum(
+        1
+        for run in runs
+        for slot in run.get("slots", []) or []
+        if slot.get("lookaheadUsed")
+    )
+    avg_lookahead_score = average(
+        slot.get("lookaheadBestScore")
+        for run in runs
+        for slot in run.get("slots", []) or []
+        if slot.get("lookaheadUsed")
+    )
 
     print(
         f"Runs: {run_count} | "
@@ -647,6 +690,10 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         f"Transition pressure: total={total_pressure_count} | "
         f"high={total_high_pressure_count} | "
         f"avg score/run={fmt_num(avg_transition_pressure)}"
+    )
+    print(
+        f"Lookahead sequencing: enabled runs={lookahead_enabled_count}/{run_count} | "
+        f"selected slots={lookahead_slot_count} | avg best score={fmt_num(avg_lookahead_score)}"
     )
     print(
         f"Behavioural signals: engagement={fmt_num(avg_engagement)} | "
@@ -663,9 +710,9 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     selected_counter: Counter[str] = Counter()
     selected_candidate_type_counter: Counter[str] = Counter()
     selected_source_counter: Counter[str] = Counter()
-    replaced_counter: Counter[str] = Counter()
-    replacement_reason_counter: Counter[str] = Counter()
-    rejection_reason_counter: Counter[str] = Counter()
+    generated_selection_counter: Counter[str] = Counter()
+    generated_mode_counter: Counter[str] = Counter()
+    generated_validation_counter: Counter[str] = Counter()
     generated_blueprint_counter: Counter[str] = Counter()
     generated_rows_counter: Counter[str] = Counter()
     death_slot_counter: Counter[str] = Counter()
@@ -681,10 +728,10 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
             selected_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
             selected_candidate_type_counter[selected_candidate_type(slot)] += 1
             selected_source_counter[selected_source_name(slot)] += 1
-            if slot.get("replacementMode") and slot.get("replacementMode") != "none":
-                replaced_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
-                replacement_reason_counter[slot.get("replacementReason", "unknown") or "unknown"] += 1
-                rejection_reason_counter[slot.get("generatedRejectionReason", "unknown") or "unknown"] += 1
+            if is_generated_blueprint_slot(slot):
+                generated_selection_counter[slot.get("selectedPrefabName", "Unknown") or "Unknown"] += 1
+                generated_mode_counter[slot.get("replacementMode", "unknown") or "unknown"] += 1
+                generated_validation_counter[slot.get("generatedRejectionReason", "unknown") or "unknown"] += 1
                 generated_blueprint_counter[slot.get("generatedBlueprintName", "unknown") or "unknown"] += 1
                 generated_rows_counter[slot.get("generatedBlueprintRows", "unknown") or "unknown"] += 1
             slot_deaths = int(slot.get("deathsAttributedToSlot", 0) or 0)
@@ -703,9 +750,9 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     print_top_counter("Most selected chunks", selected_counter, 5)
     print_top_counter("Selected candidate types", selected_candidate_type_counter, 5)
     print_top_counter("Most selected source families", selected_source_counter, 5)
-    print_top_counter("Most replaced selected chunks", replaced_counter, 5)
-    print_top_counter("Replacement reasons", replacement_reason_counter, 5)
-    print_top_counter("Generated acceptance/rejection reasons", rejection_reason_counter, 5)
+    print_top_counter("Most selected generated blueprint chunks", generated_selection_counter, 5)
+    print_top_counter("Generated blueprint selection modes", generated_mode_counter, 5)
+    print_top_counter("Generated candidate validation outcomes", generated_validation_counter, 5)
     print_top_counter("Generated blueprint names", generated_blueprint_counter, 5)
     print_top_counter("Generated blueprint layouts", generated_rows_counter, 5)
     print_top_counter("Death-heavy slots", death_slot_counter, 5)

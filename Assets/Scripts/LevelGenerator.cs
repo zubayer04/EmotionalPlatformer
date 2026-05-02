@@ -62,6 +62,16 @@ public class LevelGenerator : MonoBehaviour
     [Tooltip("Learnable Markov weight table. Created automatically if null.")]
     private MarkovWeightTable markovWeightTable;
 
+    [Header("Bounded Lookahead Sequencing")]
+    [Tooltip("If enabled, selection scores short future sequences before committing to the next chunk.")]
+    public bool useLookaheadSequencePlanning = true;
+
+    [Tooltip("Number of generated slots considered, including the immediate next chunk.")]
+    [Range(1, 3)] public int lookaheadDepth = 2;
+
+    [Tooltip("How many partial future sequences are kept at each lookahead step.")]
+    [Range(1, 6)] public int lookaheadBeamWidth = 4;
+
     [Tooltip("Avoid spawning the exact same prefab twice in a row.")]
     public bool avoidSamePrefabBackToBack = true;
 
@@ -123,6 +133,11 @@ public class LevelGenerator : MonoBehaviour
         public ChunkBlueprintFeatures blueprintFeatures;
         public string validationReason = "none";
         public float sourceFamilyWeight = 1f;
+        public bool lookaheadUsed;
+        public int lookaheadDepthUsed;
+        public float lookaheadBestScore;
+        public float lookaheadSelectionWeight;
+        public string lookaheadDecisionSummary = "none";
 
         public bool IsGenerated => blueprint != null;
 
@@ -386,6 +401,9 @@ public class LevelGenerator : MonoBehaviour
             startDifficultyBias = startDifficultyBias,
             difficultyPreferenceStrength = difficultyPreferenceStrength,
             useTwoStepMarkov = useTwoStepMarkov,
+            useLookaheadSequencePlanning = useLookaheadSequencePlanning,
+            lookaheadDepth = lookaheadDepth,
+            lookaheadBeamWidth = lookaheadBeamWidth,
             useGeneratedBlueprintChunks = useGeneratedBlueprintChunks,
             useGeneratedBlueprintCandidateSelection = useGeneratedBlueprintCandidateSelection,
             generatedChunkReplacementChance = generatedChunkReplacementChance,
@@ -959,6 +977,11 @@ public class LevelGenerator : MonoBehaviour
         record.selectedHasHazard = candidate.HasHazard;
         record.selectedEstimatedJumps = candidate.EstimatedJumps;
         record.selectedExitDelta = candidate.ExitDelta;
+        record.lookaheadUsed = candidate.lookaheadUsed;
+        record.lookaheadDepthUsed = candidate.lookaheadDepthUsed;
+        record.lookaheadBestScore = candidate.lookaheadBestScore;
+        record.lookaheadSelectionWeight = candidate.lookaheadSelectionWeight;
+        record.lookaheadDecisionSummary = candidate.lookaheadDecisionSummary;
 
         return record;
     }
@@ -1183,6 +1206,43 @@ public class LevelGenerator : MonoBehaviour
         int samePrimaryTagStreak,
         int slotIndex)
     {
+        List<ChunkSelectionCandidate> candidates = GetSelectableCandidates(
+            prev2,
+            prev1,
+            previousPrefabName,
+            samePrimaryTagStreak,
+            slotIndex);
+
+        if (candidates.Count == 0)
+            return null;
+
+        int plannedGeneratedSlots = Mathf.Max(1, totalChunks - (startingChunkPrefab != null ? 1 : 0));
+        int remainingSlots = Mathf.Max(1, plannedGeneratedSlots - slotIndex);
+        if (useLookaheadSequencePlanning && lookaheadDepth > 1 && remainingSlots > 1)
+        {
+            ChunkSelectionCandidate lookaheadCandidate = SelectChunkWithLookahead(
+                candidates,
+                prev2,
+                prev1,
+                previousPrefabName,
+                samePrimaryTagStreak,
+                slotIndex,
+                remainingSlots);
+
+            if (lookaheadCandidate != null)
+                return lookaheadCandidate;
+        }
+
+        return SelectWeightedImmediateCandidate(candidates, prev2, prev1, previousPrefabName, slotIndex);
+    }
+
+    private List<ChunkSelectionCandidate> GetSelectableCandidates(
+        ChunkTag prev2,
+        ChunkTag prev1,
+        string previousPrefabName,
+        int samePrimaryTagStreak,
+        int slotIndex)
+    {
         List<ChunkSelectionCandidate> candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, true, true);
 
         if (candidates.Count == 0)
@@ -1192,74 +1252,54 @@ public class LevelGenerator : MonoBehaviour
             candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, false, false);
 
         if (candidates.Count == 0)
-            return null;
+            return candidates;
 
-        float progress = Mathf.Clamp01((slotIndex + 1f) / Mathf.Max(1, totalChunks - 1));
-        float slotTargetDifficulty = Mathf.Lerp(startDifficultyBias, targetDifficulty, progress);
-        DifficultyBand band = MarkovWeightTable.GetBandForDifficulty(targetDifficulty);
-
+        float slotTargetDifficulty = GetSlotTargetDifficultyForGeneratedSlotIndex(slotIndex);
         candidates = ApplyExtremeOutlierEligibility(candidates, slotTargetDifficulty, targetDifficulty, slotIndex);
+        return candidates;
+    }
 
+    private ChunkSelectionCandidate SelectWeightedImmediateCandidate(
+        List<ChunkSelectionCandidate> candidates,
+        ChunkTag prev2,
+        ChunkTag prev1,
+        string previousPrefabName,
+        int slotIndex)
+    {
         float totalWeight = 0f;
         List<float> weights = new List<float>(candidates.Count);
 
         for (int i = 0; i < candidates.Count; i++)
         {
             ChunkSelectionCandidate candidate = candidates[i];
-            if (candidate == null || candidate.sourcePrefab == null)
-            {
-                weights.Add(0.01f);
-                totalWeight += 0.01f;
-                continue;
-            }
-
-            float transitionWeight = useTwoStepMarkov
-                ? GetMarkovWeight(prev2, prev1, candidate.PrimaryTag, band)
-                : 1f;
-
-            if (transitionWeight <= 0f)
-            {
-                weights.Add(0.01f);
-                totalWeight += 0.01f;
-                continue;
-            }
-
-            float diff = Mathf.Abs(candidate.Difficulty - slotTargetDifficulty);
-            float difficultyWeight = Mathf.Exp(-difficultyPreferenceStrength * diff * diff);
-
-            float varietyWeight = 1f;
-            if (candidate.PrimaryTag != prev1)
-                varietyWeight += varietyBonus;
-
-            float pacingWeight = 1f;
-            bool isHardType = candidate.PrimaryTag == ChunkTag.Spikes || candidate.PrimaryTag == ChunkTag.Precision;
-            if (slotIndex < 2 && isHardType)
-                pacingWeight *= earlyHardPenalty;
-
-            if (candidate.Difficulty > slotTargetDifficulty + 2f)
-                pacingWeight *= 0.65f;
-
-            float extremeOutlierWeight = GetExtremeOutlierDifficultyWeight(
-                candidate,
-                slotTargetDifficulty,
-                targetDifficulty);
-
-            float transitionPressureWeight = ChunkTransitionPressure.GetSelectionWeightMultiplier(
-                previousPrefabName,
-                prev1,
-                candidate.DisplayName,
-                candidate.PrimaryTag,
-                candidate.Difficulty,
-                slotTargetDifficulty,
-                targetDifficulty);
-
-            float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight *
-                                extremeOutlierWeight * transitionPressureWeight * candidate.sourceFamilyWeight;
-            finalWeight = Mathf.Max(0.01f, finalWeight);
-
+            float finalWeight = CalculateCandidateSelectionWeight(candidate, prev2, prev1, previousPrefabName, slotIndex);
             weights.Add(finalWeight);
             totalWeight += finalWeight;
         }
+
+        ChunkSelectionCandidate selected = SelectWeightedCandidate(candidates, weights, totalWeight);
+        if (selected != null)
+        {
+            selected.lookaheadUsed = false;
+            selected.lookaheadDepthUsed = 1;
+            selected.lookaheadBestScore = 0f;
+            selected.lookaheadSelectionWeight = 0f;
+            selected.lookaheadDecisionSummary = "immediate_weighted_selection";
+        }
+
+        return selected;
+    }
+
+    private ChunkSelectionCandidate SelectWeightedCandidate(
+        List<ChunkSelectionCandidate> candidates,
+        List<float> weights,
+        float totalWeight)
+    {
+        if (candidates == null || candidates.Count == 0)
+            return null;
+
+        if (weights == null || weights.Count != candidates.Count || totalWeight <= 0f)
+            return candidates[candidates.Count - 1];
 
         float roll = UnityEngine.Random.value * totalWeight;
         float running = 0f;
@@ -1272,6 +1312,289 @@ public class LevelGenerator : MonoBehaviour
         }
 
         return candidates[candidates.Count - 1];
+    }
+
+    private ChunkSelectionCandidate SelectChunkWithLookahead(
+        List<ChunkSelectionCandidate> currentCandidates,
+        ChunkTag prev2,
+        ChunkTag prev1,
+        string previousPrefabName,
+        int samePrimaryTagStreak,
+        int slotIndex,
+        int remainingSlots)
+    {
+        int depth = Mathf.Clamp(lookaheadDepth, 1, Mathf.Min(3, remainingSlots));
+        int beamWidth = Mathf.Max(1, lookaheadBeamWidth);
+
+        if (depth <= 1 || currentCandidates == null || currentCandidates.Count == 0)
+            return null;
+
+        List<LookaheadSequenceState> beam = new List<LookaheadSequenceState>(currentCandidates.Count);
+        List<LookaheadCandidateChoice> immediateChoices = new List<LookaheadCandidateChoice>(currentCandidates.Count);
+        for (int i = 0; i < currentCandidates.Count; i++)
+        {
+            ChunkSelectionCandidate candidate = currentCandidates[i];
+            float weight = CalculateCandidateSelectionWeight(candidate, prev2, prev1, previousPrefabName, slotIndex);
+            float immediateScore = Mathf.Log(Mathf.Max(0.0001f, weight));
+            immediateChoices.Add(new LookaheadCandidateChoice
+            {
+                candidate = candidate,
+                score = immediateScore,
+                selectionWeight = 0f,
+                depthReached = 1
+            });
+            beam.Add(CreateAdvancedLookaheadState(
+                candidate,
+                prev2,
+                prev1,
+                previousPrefabName,
+                samePrimaryTagStreak,
+                0f,
+                candidate,
+                weight,
+                1));
+        }
+
+        SortAndTrimLookaheadBeam(beam, Mathf.Max(beamWidth, Mathf.Min(currentCandidates.Count, beamWidth * 3)));
+
+        UnityEngine.Random.State previousRandomState = UnityEngine.Random.state;
+        try
+        {
+            for (int depthIndex = 1; depthIndex < depth; depthIndex++)
+            {
+                int futureSlotIndex = slotIndex + depthIndex;
+                List<LookaheadSequenceState> expanded = new List<LookaheadSequenceState>();
+
+                for (int i = 0; i < beam.Count; i++)
+                {
+                    LookaheadSequenceState state = beam[i];
+                    List<ChunkSelectionCandidate> futureCandidates = GetSelectableCandidates(
+                        state.prev2,
+                        state.prev1,
+                        state.previousPrefabName,
+                        state.samePrimaryTagStreak,
+                        futureSlotIndex);
+
+                    if (futureCandidates.Count == 0)
+                    {
+                        expanded.Add(state);
+                        continue;
+                    }
+
+                    for (int c = 0; c < futureCandidates.Count; c++)
+                    {
+                        ChunkSelectionCandidate futureCandidate = futureCandidates[c];
+                        float futureWeight = CalculateCandidateSelectionWeight(
+                            futureCandidate,
+                            state.prev2,
+                            state.prev1,
+                            state.previousPrefabName,
+                            futureSlotIndex);
+
+                        expanded.Add(CreateAdvancedLookaheadState(
+                            state.firstCandidate,
+                            state.prev2,
+                            state.prev1,
+                            state.previousPrefabName,
+                            state.samePrimaryTagStreak,
+                            state.cumulativeLogScore,
+                            futureCandidate,
+                            futureWeight,
+                            state.selectedCount + 1));
+                    }
+                }
+
+                if (expanded.Count == 0)
+                    break;
+
+                SortAndTrimLookaheadBeam(expanded, beamWidth);
+                beam = expanded;
+            }
+        }
+        finally
+        {
+            UnityEngine.Random.state = previousRandomState;
+        }
+
+        if (beam.Count == 0)
+            return null;
+
+        List<LookaheadCandidateChoice> choices = BuildLookaheadChoices(immediateChoices, beam);
+        if (choices.Count == 0)
+            return null;
+
+        float maxScore = choices[0].score;
+        for (int i = 1; i < choices.Count; i++)
+            maxScore = Mathf.Max(maxScore, choices[i].score);
+
+        float totalWeight = 0f;
+        for (int i = 0; i < choices.Count; i++)
+        {
+            LookaheadCandidateChoice choice = choices[i];
+            choice.selectionWeight = Mathf.Max(0.01f, Mathf.Exp(Mathf.Clamp(choice.score - maxScore, -20f, 0f)));
+            choices[i] = choice;
+            totalWeight += choice.selectionWeight;
+        }
+
+        float roll = UnityEngine.Random.value * totalWeight;
+        float running = 0f;
+        for (int i = 0; i < choices.Count; i++)
+        {
+            running += choices[i].selectionWeight;
+            if (roll <= running)
+                return ApplyLookaheadAudit(choices[i], depth, beamWidth, choices.Count);
+        }
+
+        return ApplyLookaheadAudit(choices[choices.Count - 1], depth, beamWidth, choices.Count);
+    }
+
+    private float CalculateCandidateSelectionWeight(
+        ChunkSelectionCandidate candidate,
+        ChunkTag prev2,
+        ChunkTag prev1,
+        string previousPrefabName,
+        int slotIndex)
+    {
+        if (candidate == null || candidate.sourcePrefab == null)
+            return 0.01f;
+
+        float slotTargetDifficulty = GetSlotTargetDifficultyForGeneratedSlotIndex(slotIndex);
+        DifficultyBand band = MarkovWeightTable.GetBandForDifficulty(targetDifficulty);
+
+        float transitionWeight = useTwoStepMarkov
+            ? GetMarkovWeight(prev2, prev1, candidate.PrimaryTag, band)
+            : 1f;
+
+        if (transitionWeight <= 0f)
+            return 0.01f;
+
+        float diff = Mathf.Abs(candidate.Difficulty - slotTargetDifficulty);
+        float difficultyWeight = Mathf.Exp(-difficultyPreferenceStrength * diff * diff);
+
+        float varietyWeight = 1f;
+        if (candidate.PrimaryTag != prev1)
+            varietyWeight += varietyBonus;
+
+        float pacingWeight = 1f;
+        bool isHardType = candidate.PrimaryTag == ChunkTag.Spikes || candidate.PrimaryTag == ChunkTag.Precision;
+        if (slotIndex < 2 && isHardType)
+            pacingWeight *= earlyHardPenalty;
+
+        if (candidate.Difficulty > slotTargetDifficulty + 2f)
+            pacingWeight *= 0.65f;
+
+        float extremeOutlierWeight = GetExtremeOutlierDifficultyWeight(
+            candidate,
+            slotTargetDifficulty,
+            targetDifficulty);
+
+        float transitionPressureWeight = ChunkTransitionPressure.GetSelectionWeightMultiplier(
+            previousPrefabName,
+            prev1,
+            candidate.DisplayName,
+            candidate.PrimaryTag,
+            candidate.Difficulty,
+            slotTargetDifficulty,
+            targetDifficulty);
+
+        float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight *
+                            extremeOutlierWeight * transitionPressureWeight * candidate.sourceFamilyWeight;
+        return Mathf.Max(0.01f, finalWeight);
+    }
+
+    private LookaheadSequenceState CreateAdvancedLookaheadState(
+        ChunkSelectionCandidate firstCandidate,
+        ChunkTag prev2,
+        ChunkTag prev1,
+        string previousPrefabName,
+        int samePrimaryTagStreak,
+        float cumulativeLogScore,
+        ChunkSelectionCandidate selected,
+        float selectedWeight,
+        int selectedCount)
+    {
+        ChunkTag selectedTag = selected != null ? selected.PrimaryTag : ChunkTag.Rest;
+        int nextStreak = selectedTag == prev1 ? samePrimaryTagStreak + 1 : 1;
+
+        return new LookaheadSequenceState
+        {
+            firstCandidate = firstCandidate,
+            prev2 = prev1,
+            prev1 = selectedTag,
+            previousPrefabName = selected != null ? selected.SourceName : previousPrefabName,
+            samePrimaryTagStreak = nextStreak,
+            cumulativeLogScore = cumulativeLogScore + Mathf.Log(Mathf.Max(0.0001f, selectedWeight)),
+            selectedCount = selectedCount
+        };
+    }
+
+    private void SortAndTrimLookaheadBeam(List<LookaheadSequenceState> beam, int beamWidth)
+    {
+        if (beam == null)
+            return;
+
+        beam.Sort((a, b) => b.cumulativeLogScore.CompareTo(a.cumulativeLogScore));
+
+        int maxCount = Mathf.Max(1, beamWidth);
+        if (beam.Count > maxCount)
+            beam.RemoveRange(maxCount, beam.Count - maxCount);
+    }
+
+    private List<LookaheadCandidateChoice> BuildLookaheadChoices(
+        List<LookaheadCandidateChoice> immediateChoices,
+        List<LookaheadSequenceState> beam)
+    {
+        List<LookaheadCandidateChoice> choices = new List<LookaheadCandidateChoice>();
+
+        for (int i = 0; i < immediateChoices.Count; i++)
+        {
+            ChunkSelectionCandidate candidate = immediateChoices[i].candidate;
+            float bestScore = immediateChoices[i].score;
+            int bestDepth = immediateChoices[i].depthReached;
+
+            for (int b = 0; b < beam.Count; b++)
+            {
+                LookaheadSequenceState state = beam[b];
+                if (!ReferenceEquals(state.firstCandidate, candidate))
+                    continue;
+
+                float averageScore = state.cumulativeLogScore / Mathf.Max(1, state.selectedCount);
+                if (averageScore > bestScore)
+                {
+                    bestScore = averageScore;
+                    bestDepth = state.selectedCount;
+                }
+            }
+
+            choices.Add(new LookaheadCandidateChoice
+            {
+                candidate = candidate,
+                score = bestScore,
+                depthReached = bestDepth,
+                selectionWeight = 0f
+            });
+        }
+
+        choices.Sort((a, b) => b.score.CompareTo(a.score));
+        return choices;
+    }
+
+    private ChunkSelectionCandidate ApplyLookaheadAudit(
+        LookaheadCandidateChoice choice,
+        int depth,
+        int beamWidth,
+        int optionCount)
+    {
+        ChunkSelectionCandidate candidate = choice.candidate;
+        if (candidate == null)
+            return null;
+
+        candidate.lookaheadUsed = true;
+        candidate.lookaheadDepthUsed = choice.depthReached;
+        candidate.lookaheadBestScore = choice.score;
+        candidate.lookaheadSelectionWeight = choice.selectionWeight;
+        candidate.lookaheadDecisionSummary = $"bounded_lookahead_depth_{depth}_beam_{beamWidth}_options_{optionCount}";
+        return candidate;
     }
 
     private List<ChunkSelectionCandidate> ApplyExtremeOutlierEligibility(
@@ -1715,5 +2038,24 @@ public class LevelGenerator : MonoBehaviour
         public string generatedBlueprintName;
         public string generatedBlueprintRows;
         public ChunkBlueprintFeatures generatedBlueprintFeatures;
+    }
+
+    private struct LookaheadSequenceState
+    {
+        public ChunkSelectionCandidate firstCandidate;
+        public ChunkTag prev2;
+        public ChunkTag prev1;
+        public string previousPrefabName;
+        public int samePrimaryTagStreak;
+        public float cumulativeLogScore;
+        public int selectedCount;
+    }
+
+    private struct LookaheadCandidateChoice
+    {
+        public ChunkSelectionCandidate candidate;
+        public float score;
+        public float selectionWeight;
+        public int depthReached;
     }
 }
