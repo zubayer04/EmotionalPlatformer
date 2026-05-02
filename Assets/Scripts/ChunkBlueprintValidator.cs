@@ -57,6 +57,11 @@ public static class ChunkBlueprintValidator
                     case '.':
                         break;
 
+                    case 'D':
+                        if (!HasGroundSupportDirectlyBelow(blueprint, x, y))
+                            result.AddError($"Decoration 'D' at ({x}, {y}) must sit directly above ground '#'.");
+                        break;
+
                     case '#':
                     case 'B':
                     case 'P':
@@ -121,5 +126,21 @@ public static class ChunkBlueprintValidator
             result.AddError("Blueprint hasHazard is false, but hazard tiles (S or M) were found.");
 
         return result;
+    }
+
+    private static bool HasGroundSupportDirectlyBelow(ChunkBlueprint blueprint, int x, int y)
+    {
+        if (blueprint == null || blueprint.rows == null)
+            return false;
+
+        int belowY = y + 1;
+        if (belowY < 0 || belowY >= blueprint.rows.Count)
+            return false;
+
+        string belowRow = blueprint.rows[belowY];
+        if (string.IsNullOrEmpty(belowRow) || x < 0 || x >= belowRow.Length)
+            return false;
+
+        return belowRow[x] == '#';
     }
 }

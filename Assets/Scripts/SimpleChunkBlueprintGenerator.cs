@@ -11,27 +11,37 @@ public static class SimpleChunkBlueprintGenerator
             return null;
         }
 
+        ChunkBlueprint blueprint;
+
         switch (request.requestedPrimaryTag)
         {
             case ChunkTag.Rest:
             case ChunkTag.Safe:
-                return GenerateRestLike(request);
+                blueprint = GenerateRestLike(request);
+                break;
 
             case ChunkTag.Gap:
-                return GenerateGapLike(request);
+                blueprint = GenerateGapLike(request);
+                break;
 
             case ChunkTag.Spikes:
-                return GenerateSpikesLike(request);
+                blueprint = GenerateSpikesLike(request);
+                break;
 
             case ChunkTag.Vertical:
-                return GenerateVerticalLike(request);
+                blueprint = GenerateVerticalLike(request);
+                break;
 
             case ChunkTag.Precision:
-                return GeneratePrecisionLike(request);
+                blueprint = GeneratePrecisionLike(request);
+                break;
 
             default:
-                return GenerateRestLike(request);
+                blueprint = GenerateRestLike(request);
+                break;
         }
+
+        return AddGroundDecorations(blueprint);
     }
 
     private static int GetPreferredWidth(ChunkGenerationRequest request, int minimum)
@@ -639,5 +649,88 @@ public static class SimpleChunkBlueprintGenerator
         }
 
         return Vector2Int.zero;
+    }
+
+    private static ChunkBlueprint AddGroundDecorations(ChunkBlueprint blueprint)
+    {
+        if (blueprint == null || blueprint.rows == null || blueprint.rows.Count < 2)
+            return blueprint;
+
+        List<Vector2Int> candidates = FindDecorationCandidates(blueprint);
+        if (candidates.Count == 0)
+            return blueprint;
+
+        int maxDecorationCount = Mathf.Min(2, candidates.Count);
+        int targetDecorationCount = maxDecorationCount == 1
+            ? 1
+            : (Random.value < 0.65f ? 1 : 2);
+
+        List<Vector2Int> selected = new List<Vector2Int>();
+        while (selected.Count < targetDecorationCount && candidates.Count > 0)
+        {
+            int index = Random.Range(0, candidates.Count);
+            Vector2Int candidate = candidates[index];
+            candidates.RemoveAt(index);
+
+            if (!IsFarEnoughFromSelected(candidate, selected))
+                continue;
+
+            selected.Add(candidate);
+        }
+
+        if (selected.Count == 0)
+            return blueprint;
+
+        List<char[]> mutableRows = new List<char[]>(blueprint.rows.Count);
+        for (int i = 0; i < blueprint.rows.Count; i++)
+            mutableRows.Add(blueprint.rows[i].ToCharArray());
+
+        for (int i = 0; i < selected.Count; i++)
+        {
+            Vector2Int cell = selected[i];
+            mutableRows[cell.y][cell.x] = 'D';
+        }
+
+        List<string> decoratedRows = new List<string>(mutableRows.Count);
+        for (int i = 0; i < mutableRows.Count; i++)
+            decoratedRows.Add(new string(mutableRows[i]));
+
+        blueprint.rows = decoratedRows;
+        return blueprint;
+    }
+
+    private static List<Vector2Int> FindDecorationCandidates(ChunkBlueprint blueprint)
+    {
+        List<Vector2Int> candidates = new List<Vector2Int>();
+
+        for (int y = 0; y < blueprint.rows.Count - 1; y++)
+        {
+            string row = blueprint.rows[y];
+            string belowRow = blueprint.rows[y + 1];
+            if (string.IsNullOrEmpty(row) || string.IsNullOrEmpty(belowRow))
+                continue;
+
+            int width = Mathf.Min(row.Length, belowRow.Length);
+            for (int x = 0; x < width; x++)
+            {
+                if (row[x] == '.' && belowRow[x] == '#')
+                    candidates.Add(new Vector2Int(x, y));
+            }
+        }
+
+        return candidates;
+    }
+
+    private static bool IsFarEnoughFromSelected(Vector2Int candidate, List<Vector2Int> selected)
+    {
+        const int minimumHorizontalSpacing = 3;
+
+        for (int i = 0; i < selected.Count; i++)
+        {
+            if (Mathf.Abs(candidate.x - selected[i].x) < minimumHorizontalSpacing)
+                return false;
+        }
+
+        return true;
     }
 }

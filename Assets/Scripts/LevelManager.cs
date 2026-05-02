@@ -574,6 +574,7 @@ public class LevelManager : MonoBehaviour
             tooHard = decision.tooHard,
             tooEasySingleRun = decision.tooEasySingleRun,
             tooEasyByStreak = decision.tooEasyByStreak,
+            tooEasyComfortStreak = decision.tooEasyComfortStreak,
             actualDifficultyOvershoot = decision.actualDifficultyOvershoot,
             actualDifficultyUndershoot = decision.actualDifficultyUndershoot,
             increaseBlockedByActualOvershoot = decision.increaseBlockedByActualOvershoot,

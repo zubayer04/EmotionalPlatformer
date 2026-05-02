@@ -4,6 +4,7 @@ using UnityEngine;
 public static class AdaptiveDifficultyController
 {
     private const float MinorOvershootGrace = 0.5f;
+    private const float ComfortIncreaseOvershootGrace = 0.75f;
 
     [Serializable]
     public struct Settings
@@ -51,6 +52,7 @@ public static class AdaptiveDifficultyController
         public bool tooHard;
         public bool tooEasySingleRun;
         public bool tooEasyByStreak;
+        public bool tooEasyComfortStreak;
         public bool actualDifficultyOvershoot;
         public bool actualDifficultyUndershoot;
         public bool increaseBlockedByActualOvershoot;
@@ -110,6 +112,12 @@ public static class AdaptiveDifficultyController
             lowPressure &&
             !actualOvershoot;
 
+        bool tooEasyComfortStreak =
+            cleanRunStreakAfter >= requiredCleanRunStreak &&
+            lowPressure &&
+            actualOvershoot &&
+            actualTargetDelta <= settings.actualDifficultyOvershootTolerance + ComfortIncreaseOvershootGrace;
+
         bool minorErrorGuardApplied =
             actualOvershoot &&
             input.deathsThisLevel == 1 &&
@@ -157,6 +165,13 @@ public static class AdaptiveDifficultyController
             decisionCode = "increase_clean_streak";
             decisionText = $"Clean low-strain streak ({requiredCleanRunStreak}) -> increase target";
         }
+        else if (tooEasyComfortStreak)
+        {
+            cleanRunStreakAfter = 0;
+            newTarget += settings.targetDifficultyStep;
+            decisionCode = "increase_comfort_streak_mild_overshoot";
+            decisionText = "Sustained low-strain clean play despite mild content overshoot -> increase target";
+        }
         else
         {
             if (actualOvershoot && cleanRun && easyPerformance)
@@ -193,6 +208,7 @@ public static class AdaptiveDifficultyController
             tooHard = tooHard,
             tooEasySingleRun = tooEasySingleRun,
             tooEasyByStreak = tooEasyByStreak,
+            tooEasyComfortStreak = tooEasyComfortStreak,
             actualDifficultyOvershoot = actualOvershoot,
             actualDifficultyUndershoot = actualUndershoot,
             increaseBlockedByActualOvershoot = increaseBlockedByActualOvershoot,

@@ -442,6 +442,12 @@ MonoBehaviour:
   boxSprite: {fileID: 3265241409279719089, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
   precisionSprite: {fileID: 9150597117792277750, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
   spikeSprite: {fileID: -1982991433, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
+  decorationSprites:
+  - {fileID: 7401013995216560476, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
+  - {fileID: -4886383347499431902, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
+  - {fileID: -3388227312432987789, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
+  - {fileID: -8549668622487413762, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
+  - {fileID: 7921149549912493471, guid: 079b253d3d66e4009a5c5c431a3338d6, type: 3}
   blueprintToBuild:
     chunkName: 
     width: 0
@@ -981,7 +987,7 @@ Camera:
   far clip plane: 1000
   field of view: 60
   orthographic: 1
-  orthographic size: 5.625
+  orthographic size: 5.6998553
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -1208,7 +1214,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GeneratedChunkBuildTester
   builder: {fileID: 672173401}
-  sourceChunkPrefab: {fileID: 8418884132628795399, guid: 88dc2cbf877974e4e96eea3604076428, type: 3}
+  sourceChunkPrefab: {fileID: 8418884132628795399, guid: 3781df74d421942da9a0cb86875791f3, type: 3}
   request:
     requestedPrimaryTag: 3
     targetDifficulty: 2

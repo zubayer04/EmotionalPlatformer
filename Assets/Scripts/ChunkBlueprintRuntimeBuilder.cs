@@ -15,6 +15,7 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
     [SerializeField] private Sprite boxSprite;
     [SerializeField] private Sprite precisionSprite;
     [SerializeField] private Sprite spikeSprite;
+    [SerializeField] private Sprite[] decorationSprites;
 
     [Header("Debug Input")]
     [SerializeField] private ChunkBlueprint blueprintToBuild;
@@ -78,6 +79,10 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
                 else if (cell == 'M')
                 {
                     CreateMovingHazardMarker(root.transform, localPos, size);
+                }
+                else if (cell == 'D')
+                {
+                    CreateDecorationTile(root.transform, localPos);
                 }
             }
         }
@@ -268,6 +273,55 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
         }
 
         return go;
+    }
+
+    private GameObject CreateDecorationTile(Transform parent, Vector3 localPos)
+    {
+        Sprite sprite = GetRandomDecorationSprite();
+        if (sprite == null)
+            return null;
+
+        GameObject go = new GameObject("Decoration");
+        go.transform.SetParent(parent);
+        go.transform.localPosition = localPos;
+        go.transform.localScale = Vector3.one;
+
+        SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
+        sr.sprite = sprite;
+        sr.color = Color.white;
+
+        return go;
+    }
+
+    private Sprite GetRandomDecorationSprite()
+    {
+        if (decorationSprites == null || decorationSprites.Length == 0)
+            return null;
+
+        int validCount = 0;
+        for (int i = 0; i < decorationSprites.Length; i++)
+        {
+            if (decorationSprites[i] != null)
+                validCount++;
+        }
+
+        if (validCount == 0)
+            return null;
+
+        int target = Random.Range(0, validCount);
+        int seen = 0;
+        for (int i = 0; i < decorationSprites.Length; i++)
+        {
+            if (decorationSprites[i] == null)
+                continue;
+
+            if (seen == target)
+                return decorationSprites[i];
+
+            seen++;
+        }
+
+        return null;
     }
 
     private void CreateMergedSolidColliders(Transform parent, ChunkBlueprint blueprint)

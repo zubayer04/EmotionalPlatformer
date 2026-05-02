@@ -278,6 +278,14 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             if (!allowed)
                 continue;
 
+            if (!IsRuntimeGeneratedCandidateEligible(source))
+            {
+                sb.AppendLine(
+                    $"{source.name} | {source.primaryTag} | {source.difficultyRating} | {source.estimatedJumps} | {source.hasHazard} | " +
+                    $"({source.exitDelta.x:0.##}, {source.exitDelta.y:0.##}) | {source.maxGapWidth} | - | - | - | - | - | - | - | - | - | - | Not Runtime Eligible | {GetRuntimeEligibilityReason(source)}");
+                continue;
+            }
+
             ChunkGenerationRequest request = new ChunkGenerationRequest
             {
                 requestedPrimaryTag = source.primaryTag,
@@ -1145,10 +1153,33 @@ public class ChunkCalibrationReporterWindow : EditorWindow
     {
         return tag == ChunkTag.Gap ||
                tag == ChunkTag.Precision ||
-               tag == ChunkTag.Vertical ||
-               tag == ChunkTag.Spikes ||
                tag == ChunkTag.Safe ||
                tag == ChunkTag.Rest;
+    }
+
+    private static bool IsRuntimeGeneratedCandidateEligible(ChunkRecord source)
+    {
+        if (source.primaryTag == ChunkTag.Gap)
+            return true;
+
+        if (source.primaryTag == ChunkTag.Precision)
+            return IsElevatedPlatformPrecisionSource(source);
+
+        return source.primaryTag == ChunkTag.Safe || source.primaryTag == ChunkTag.Rest;
+    }
+
+    private static bool IsElevatedPlatformPrecisionSource(ChunkRecord source)
+    {
+        return source.primaryTag == ChunkTag.Precision &&
+               source.name.Contains("Chunk_ElevatedPlatform_Tilemap");
+    }
+
+    private static string GetRuntimeEligibilityReason(ChunkRecord source)
+    {
+        if (source.primaryTag == ChunkTag.Precision)
+            return "runtime candidate selection only enables precision blueprints for Chunk_ElevatedPlatform_Tilemap";
+
+        return "runtime candidate selection does not currently enable this generated family";
     }
 
     private static bool IsReplacementAllowedBySettings(LevelGenerator generator, ChunkTag tag)

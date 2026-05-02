@@ -1390,7 +1390,7 @@ public class LevelGenerator : MonoBehaviour
             if (blueprint == null)
                 continue;
 
-            string blueprintKey = blueprint.chunkName + "|" + ChunkBlueprintFeatureExtractor.RowsToInlineText(blueprint);
+            string blueprintKey = GetStructuralBlueprintKey(blueprint);
             if (!seenBlueprints.Add(blueprintKey))
                 continue;
 
@@ -1400,6 +1400,9 @@ public class LevelGenerator : MonoBehaviour
                 continue;
 
             if (!IsGeneratedReplacementAcceptable(sourceData, request, blueprint, features, out string rejectionReason))
+                continue;
+
+            if (IsGeneratedCandidateSourceDuplicate(sourcePrefab, sourceData, blueprint))
                 continue;
 
             generated.Add(new ChunkSelectionCandidate
@@ -1420,6 +1423,33 @@ public class LevelGenerator : MonoBehaviour
             generated[i].sourceFamilyWeight = perCandidateWeight;
             candidates.Add(generated[i]);
         }
+    }
+
+    private bool IsGeneratedCandidateSourceDuplicate(GameObject sourcePrefab, ChunkData sourceData, ChunkBlueprint blueprint)
+    {
+        if (sourcePrefab == null || sourceData == null || blueprint == null)
+            return false;
+
+        string sourceName = NormalizePrefabName(sourcePrefab.name);
+        string blueprintName = blueprint.chunkName ?? string.Empty;
+
+        if (sourceName == "Chunk_Flat_Tilemap" && blueprintName == "Generated_Rest")
+            return true;
+
+        if (sourceData.primaryTag == ChunkTag.Gap && blueprintName == "Generated_Gap_Centered_Flat")
+            return true;
+
+        return false;
+    }
+
+    private string GetStructuralBlueprintKey(ChunkBlueprint blueprint)
+    {
+        if (blueprint == null)
+            return string.Empty;
+
+        string rows = ChunkBlueprintFeatureExtractor.RowsToInlineText(blueprint);
+        rows = rows.Replace('D', '.');
+        return $"{blueprint.chunkName}|{rows}";
     }
 
     private bool CanUseGeneratedBlueprintCandidate(ChunkData cd)
