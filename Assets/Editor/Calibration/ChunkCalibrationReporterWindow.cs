@@ -113,6 +113,7 @@ public class ChunkCalibrationReporterWindow : EditorWindow
                 sb.AppendLine($"chunkPrefabs[{i}]: {AssetPath(generator.chunkPrefabs[i])}");
         }
 
+        sb.AppendLine($"generationMode: {generator.generationMode}");
         sb.AppendLine($"useTwoStepMarkov: {generator.useTwoStepMarkov}");
         sb.AppendLine($"useLookaheadSequencePlanning: {generator.useLookaheadSequencePlanning}");
         sb.AppendLine($"lookaheadDepth: {generator.lookaheadDepth}");

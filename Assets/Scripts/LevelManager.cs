@@ -637,6 +637,8 @@ public class LevelManager : MonoBehaviour
             performanceStrain = decision.performanceStrain,
             smoothedStrain = decision.smoothedStrain,
             cleanRun = decision.cleanRun,
+            comfortRun = decision.comfortRun,
+            lowSignalDeathRun = decision.lowSignalDeathRun,
             tooHard = decision.tooHard,
             tooEasySingleRun = decision.tooEasySingleRun,
             tooEasyByStreak = decision.tooEasyByStreak,
@@ -697,6 +699,8 @@ public class LevelManager : MonoBehaviour
             performanceStrain = 0f,
             smoothedStrain = hasRecentStrainScore ? recentStrainScore : 0f,
             cleanRun = deathsThisLevel == 0 && timePerChunk < fastTimePerChunkThreshold,
+            comfortRun = deathsThisLevel == 0 && timePerChunk < fastTimePerChunkThreshold,
+            lowSignalDeathRun = false,
             tooHard = false,
             tooEasySingleRun = false,
             tooEasyByStreak = false,
@@ -896,7 +900,7 @@ public class LevelManager : MonoBehaviour
             $"Last Target After: {lastTargetAfterAdapt:F2}\n" +
             $"Last Decision: {lastAdaptationDecision}\n" +
             $"Recent Strain: {(hasRecentStrainScore ? recentStrainScore : 0f):F2}\n" +
-            $"Clean Run Streak: {cleanRunStreak} / {cleanRunStreakThreshold}";
+            $"Comfort Streak: {cleanRunStreak} / {cleanRunStreakThreshold}";
 
         if (waitingForNextLevelChoice)
         {

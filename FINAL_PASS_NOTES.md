@@ -143,15 +143,80 @@ Testing note:
 - It should be inspected during Pass 3 adaptation runs, but it does not require reopening Pass 2 because it affects adaptive learning after a level, not the fixed-target generator delivery tested in Pass 2.
 - If it does not trigger naturally, that is not a failure; it means the player did not hit repeated deaths on a pre-logged strong/severe pressure transition.
 
-## Next Pass: Adaptation Behaviour
+## Pass 3: Adaptation Behaviour
+
+Status: passed and closed.
+
+Evidence from the adaptive-on 10-run batch:
+- Adaptive mode was on for 10/10 runs.
+- Target progression was visible:
+  - Level 7 increased from `5.00` to `5.50` via `increase_low_strain_undershoot`.
+  - Level 10 increased from `5.50` to `6.00` via `increase_clean_streak`.
+- Average target difficulty: `5.15`.
+- Average actual difficulty: `5.63`.
+- Average actual-target delta: `+0.48`.
+- Average absolute target error: `0.82`.
+- Overshoot greater than `+1`: `3/10`.
+- Generated candidate rate: `22/100` slots (`22.0%`).
+- Transition pressure count: `3`; high-pressure transitions: `1`.
+- Structural budget was enabled in 10/10 runs and penalized `15` slots.
+- Markov learning applied in 10/10 runs.
+
+Important run-level observations:
+- Level 3 showed the minor-error guard working:
+  - target `5.00`, actual `6.50`, one low-strain death.
+  - decision: `keep_minor_error_content_overshot`.
+- Level 4 and Level 9 showed overshoot blocking immediate increases:
+  - Level 4: actual-target `+1.25`, clean run, decision `keep_content_overshot`.
+  - Level 9: actual-target `+1.75`, clean run, decision `keep_content_overshot`.
+- Level 9 still counted toward the clean streak despite the overshoot, then Level 10 increased target after another clean low-strain run.
+- Player notes aligned with logs:
+  - `Chunk_StairsUp_Tilemap -> Chunk_Spikes_Tilemap` was logged as `awkward_exit_to_spikes` with strong pressure.
+  - `Chunk_PrecisionJump_Tilemap -> Chunk_SpikesMedium_Tilemap` was logged as `precision_to_recoverable_spikes` with moderate pressure.
+
+Interpretation:
+- The controller is working defensibly: it can increase target, hold steady, avoid overreacting to a single low-signal death, and block immediate increases when delivered content overshoots heavily.
+- The controller is intentionally conservative. A low-strain accidental death avoids a decrease, but still resets the clean-run streak.
+- This conservatism is acceptable for the final system, but should be discussed as a limitation/tuning choice.
+
+Final refinement:
+- Added a low-strain comfort streak before Pass 4.
+- A run now contributes to comfort evidence if it is clean, or if it has exactly one low-signal death with low strain, low deaths-per-chunk, and fast completion.
+- This keeps accidental one-death runs from erasing evidence that the player is comfortable.
+- It does not make repeated deaths or high-strain deaths count as comfort evidence.
+- Retrospective replay of the adaptive-on batch suggested the target would have reached about `6.50` instead of `6.00`, which better matches the low-struggle playdata.
+
+Pressure-aware Markov note:
+- Pressure-aware Markov did not trigger in this batch.
+- This is not a failure because the trigger requires repeated deaths on a pre-logged strong/severe pressure transition.
+
+Decision:
+- Close Pass 3.
+- Keep the comfort-streak refinement and verify it with a short adaptive smoke batch before using adaptation results as evidence.
+- Pass 4 generator comparison can still proceed with adaptation off after the smoke check.
+
+## Next Pass: Evaluation Evidence
 
 Recommended next step:
-- Run adaptive mode on from a known starting difficulty.
-- Use the now-stabilised generator to judge adaptation decisions without confounding them with frequent generator overshoot.
+- Move into Pass 4: final evaluation evidence and comparison setup.
+- Prioritize evidence that supports dissertation claims rather than adding new gameplay systems.
 
-Questions for Pass 3:
-- Does target difficulty increase after sustained low-strain/clean play?
-- Does the controller avoid overreacting to single accidental deaths?
-- Does it decrease or hold target sensibly when delivered content overshoots?
-- Do behavioural signals and Markov learning appear in logs as supporting evidence rather than decorative fields?
-- If pressure-aware Markov learning triggers, is the reason interpretable from both the pressure metadata and the runtime deaths?
+Main comparison to prepare:
+- Current constrained generator vs naive/random generation.
+- This is the strongest evaluation story because PCG/sequencing quality is a core contribution.
+- Evaluation support now exposes `generationMode`:
+  - `Constrained` uses the full sequencing stack.
+  - `NaiveRandom` randomly selects from the same eligible candidate pool while keeping only basic hard playability constraints.
+  - The mode is written into JSONL and surfaced by the analyzer/evaluation report.
+
+Post-smoke playability fix:
+- A NaiveRandom run was abandoned after an unclearable local geometry interaction:
+  `Generated_GapHazard_ExitOuterSpike` into `Chunk_MovingClimbSpikes_Tilemap`.
+- The issue was not a general difficulty-tuning problem; it was a specific geometry conflict between the exit spike on the generated gap and the vertical spike guard inside the moving climb spike chunk.
+- Added a narrow constrained-mode hard ban for that exact pair.
+- This keeps the constrained generator defensible as a playability-filtered system while preserving NaiveRandom as a deliberately weak comparison mode.
+
+Secondary evidence:
+- Adaptive-on vs adaptive-off can be used to show target trajectory/controller behaviour, but should not be overclaimed as proof of improved player experience from the current small sample.
+- Blueprint isolation/runtime evidence can support controlled variety and validation.
+- Player notes should be treated as qualitative triangulation.

@@ -204,6 +204,10 @@ def summarize_dataset(label: str, path: Path, runs: list[dict[str, Any]]) -> dic
         "label": label,
         "path": str(path),
         "runs": len(runs),
+        "generation_modes": ", ".join(
+            f"{mode}={count}"
+            for mode, count in sorted(Counter(run.get("generationMode", "legacy") or "legacy" for run in runs).items())
+        ),
         "avg_target": avg(metric(run, "targetDifficultyBeforeRun") for run in runs),
         "avg_actual": avg(metric(run, "actualLevelDifficultyScore") for run in runs),
         "avg_delta": avg(deltas),
@@ -236,6 +240,7 @@ def write_runs_csv(path: Path, datasets: list[tuple[str, list[dict[str, Any]]]])
         "index",
         "runId",
         "seed",
+        "generation_mode",
         "target",
         "actual",
         "actual_minus_target",
@@ -248,6 +253,9 @@ def write_runs_csv(path: Path, datasets: list[tuple[str, list[dict[str, Any]]]])
         "decision",
         "target_before",
         "target_after",
+        "clean_run",
+        "comfort_run",
+        "low_signal_death_run",
         "performance_strain",
         "smoothed_strain",
         "engagement",
@@ -276,6 +284,7 @@ def write_runs_csv(path: Path, datasets: list[tuple[str, list[dict[str, Any]]]])
                         "index": index,
                         "runId": metric(run, "runId"),
                         "seed": metric(run, "runSeed"),
+                        "generation_mode": metric(run, "generationMode", "legacy"),
                         "target": metric(run, "targetDifficultyBeforeRun"),
                         "actual": metric(run, "actualLevelDifficultyScore"),
                         "actual_minus_target": run_delta(run),
@@ -288,6 +297,9 @@ def write_runs_csv(path: Path, datasets: list[tuple[str, list[dict[str, Any]]]])
                         "decision": ad.get("decisionCode"),
                         "target_before": ad.get("targetBefore"),
                         "target_after": ad.get("targetAfter"),
+                        "clean_run": ad.get("cleanRun"),
+                        "comfort_run": ad.get("comfortRun"),
+                        "low_signal_death_run": ad.get("lowSignalDeathRun"),
                         "performance_strain": ad.get("performanceStrain"),
                         "smoothed_strain": ad.get("smoothedStrain"),
                         "engagement": ad.get("engagementScore"),
@@ -311,6 +323,7 @@ def write_slots_csv(path: Path, datasets: list[tuple[str, list[dict[str, Any]]]]
         "dataset",
         "run_index",
         "runId",
+        "generationMode",
         "sequenceIndex",
         "generatedSlotIndex",
         "slotTargetDifficulty",
@@ -341,6 +354,7 @@ def write_slots_csv(path: Path, datasets: list[tuple[str, list[dict[str, Any]]]]
                             "dataset": label,
                             "run_index": run_index,
                             "runId": metric(run, "runId"),
+                            "generationMode": metric(run, "generationMode", "legacy"),
                             "sequenceIndex": slot.get("sequenceIndex"),
                             "generatedSlotIndex": slot.get("generatedSlotIndex"),
                             "slotTargetDifficulty": target,
@@ -555,13 +569,13 @@ def write_report(
     lines.append("## Dataset Summary")
     lines.append("")
     lines.append(
-        "| Dataset | Runs | Avg Target | Avg Actual | Avg Actual-Target | Avg Abs Error | "
+        "| Dataset | Generation Mode(s) | Runs | Avg Target | Avg Actual | Avg Actual-Target | Avg Abs Error | "
         "Overshoot > 1 | Avg Deaths | Avg Time/Chunk | Avg Pressure | Avg Generated Slots |"
     )
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for summary in summaries:
         lines.append(
-            f"| {summary['label']} | {summary['runs']} | {fmt(summary['avg_target'])} | "
+            f"| {summary['label']} | {summary['generation_modes']} | {summary['runs']} | {fmt(summary['avg_target'])} | "
             f"{fmt(summary['avg_actual'])} | {fmt(summary['avg_delta'])} | "
             f"{fmt(summary['avg_abs_delta'])} | {summary['overshoot_gt_1']} | "
             f"{fmt(summary['avg_deaths'])} | {fmt(summary['avg_time_per_chunk'])} | "
@@ -590,10 +604,14 @@ def write_report(
             for after, before in target_changes
             if isinstance(after, (int, float)) and isinstance(before, (int, float)) and after < before
         )
+        comfort_runs = sum(1 for run in runs if adaptation_metric(run, "comfortRun") is True)
+        low_signal_deaths = sum(1 for run in runs if adaptation_metric(run, "lowSignalDeathRun") is True)
         lines.append(f"### {label}")
         lines.append("")
         lines.append(f"- Target increases: {increases}")
         lines.append(f"- Target decreases: {decreases}")
+        if comfort_runs > 0 or low_signal_deaths > 0:
+            lines.append(f"- Comfort-run evidence: {comfort_runs} runs, including {low_signal_deaths} low-signal one-death runs")
         lines.append("- Adaptation decisions:")
         for decision, count in decisions.most_common():
             lines.append(f"  - `{decision}`: {count}")

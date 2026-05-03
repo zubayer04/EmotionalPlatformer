@@ -2,6 +2,12 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
+public enum LevelGenerationMode
+{
+    Constrained,
+    NaiveRandom
+}
+
 public class LevelGenerator : MonoBehaviour
 {
     [Header("Chunks")]
@@ -28,6 +34,10 @@ public class LevelGenerator : MonoBehaviour
     [Header("Behaviour")]
     [Tooltip("If true, GenerateLevel() will first clear any previously spawned chunks.")]
     public bool clearBeforeGenerate = true;
+
+    [Header("Evaluation Mode")]
+    [Tooltip("Constrained uses the full sequencing system. NaiveRandom randomly selects from the same eligible candidate pool with only basic hard playability constraints.")]
+    public LevelGenerationMode generationMode = LevelGenerationMode.Constrained;
 
     [Header("Generated Blueprint Integration")]
     [Tooltip("If enabled, some selected chunks may be replaced by runtime-generated blueprint chunks.")]
@@ -441,6 +451,7 @@ public class LevelGenerator : MonoBehaviour
             replaySourceSeed = replaySourceSeed,
             targetDifficultyBeforeRun = targetDifficulty,
             startDifficultyBias = startDifficultyBias,
+            generationMode = generationMode.ToString(),
             difficultyPreferenceStrength = difficultyPreferenceStrength,
             useTwoStepMarkov = useTwoStepMarkov,
             useLookaheadSequencePlanning = useLookaheadSequencePlanning,
@@ -474,6 +485,7 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2 = ChunkTag.Rest;
 
         string previousPrefabName = string.Empty;
+        string previousCandidateName = string.Empty;
         int samePrimaryTagStreak = 0;
         StructuralBudgetState structuralBudgetState = default;
 
@@ -489,6 +501,7 @@ public class LevelGenerator : MonoBehaviour
                 prev1 = startData.primaryTag;
                 prev2 = startData.primaryTag;
                 previousPrefabName = startingChunkPrefab.name;
+                previousCandidateName = startingChunkPrefab.name;
                 samePrimaryTagStreak = 1;
             }
 
@@ -503,6 +516,7 @@ public class LevelGenerator : MonoBehaviour
                 prev2,
                 prev1,
                 previousPrefabName,
+                previousCandidateName,
                 samePrimaryTagStreak,
                 i,
                 structuralBudgetState);
@@ -524,6 +538,7 @@ public class LevelGenerator : MonoBehaviour
             prev2 = prev1;
             prev1 = selectedTag;
             previousPrefabName = candidate.SourceName;
+            previousCandidateName = candidate.DisplayName;
         }
 
         return sequence;
@@ -1279,14 +1294,19 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
+        string previousCandidateName,
         int samePrimaryTagStreak,
         int slotIndex,
         StructuralBudgetState structuralBudgetState)
     {
+        if (generationMode == LevelGenerationMode.NaiveRandom)
+            return SelectNaiveRandomCandidate(prev2, prev1, previousPrefabName, samePrimaryTagStreak);
+
         List<ChunkSelectionCandidate> candidates = GetSelectableCandidates(
             prev2,
             prev1,
             previousPrefabName,
+            previousCandidateName,
             samePrimaryTagStreak,
             slotIndex);
 
@@ -1302,6 +1322,7 @@ public class LevelGenerator : MonoBehaviour
                 prev2,
                 prev1,
                 previousPrefabName,
+                previousCandidateName,
                 samePrimaryTagStreak,
                 slotIndex,
                 remainingSlots,
@@ -1318,16 +1339,17 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
+        string previousCandidateName,
         int samePrimaryTagStreak,
         int slotIndex)
     {
-        List<ChunkSelectionCandidate> candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, true, true);
+        List<ChunkSelectionCandidate> candidates = GetCandidates(prev2, prev1, previousPrefabName, previousCandidateName, samePrimaryTagStreak, true, true);
 
         if (candidates.Count == 0)
-            candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, false, true);
+            candidates = GetCandidates(prev2, prev1, previousPrefabName, previousCandidateName, samePrimaryTagStreak, false, true);
 
         if (candidates.Count == 0)
-            candidates = GetCandidates(prev2, prev1, previousPrefabName, samePrimaryTagStreak, false, false);
+            candidates = GetCandidates(prev2, prev1, previousPrefabName, previousCandidateName, samePrimaryTagStreak, false, false);
 
         if (candidates.Count == 0)
             return candidates;
@@ -1335,6 +1357,36 @@ public class LevelGenerator : MonoBehaviour
         float slotTargetDifficulty = GetSlotTargetDifficultyForGeneratedSlotIndex(slotIndex);
         candidates = ApplyExtremeOutlierEligibility(candidates, slotTargetDifficulty, targetDifficulty, slotIndex);
         return candidates;
+    }
+
+    private ChunkSelectionCandidate SelectNaiveRandomCandidate(
+        ChunkTag prev2,
+        ChunkTag prev1,
+        string previousPrefabName,
+        int samePrimaryTagStreak)
+    {
+        List<ChunkSelectionCandidate> candidates = GetCandidates(
+            prev2,
+            prev1,
+            previousPrefabName,
+            string.Empty,
+            samePrimaryTagStreak,
+            enforceExactRepeatRule: false,
+            enforceTagStreakRule: false);
+
+        if (candidates.Count == 0)
+            return null;
+
+        ChunkSelectionCandidate selected = candidates[UnityEngine.Random.Range(0, candidates.Count)];
+        selected.lookaheadUsed = false;
+        selected.lookaheadDepthUsed = 1;
+        selected.lookaheadBestScore = 0f;
+        selected.lookaheadSelectionWeight = 0f;
+        selected.lookaheadDecisionSummary = $"naive_random_basic_constraints_options_{candidates.Count}";
+        selected.structuralBudgetWeight = 1f;
+        selected.structuralBudgetProjectedLoad = 0f;
+        selected.structuralBudgetAllowedLoad = 0f;
+        return selected;
     }
 
     private ChunkSelectionCandidate SelectWeightedImmediateCandidate(
@@ -1404,6 +1456,7 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
+        string previousCandidateName,
         int samePrimaryTagStreak,
         int slotIndex,
         int remainingSlots,
@@ -1440,6 +1493,7 @@ public class LevelGenerator : MonoBehaviour
                 prev2,
                 prev1,
                 previousPrefabName,
+                previousCandidateName,
                 samePrimaryTagStreak,
                 structuralBudgetState,
                 0f,
@@ -1465,6 +1519,7 @@ public class LevelGenerator : MonoBehaviour
                         state.prev2,
                         state.prev1,
                         state.previousPrefabName,
+                        state.previousCandidateName,
                         state.samePrimaryTagStreak,
                         futureSlotIndex);
 
@@ -1490,6 +1545,7 @@ public class LevelGenerator : MonoBehaviour
                             state.prev2,
                             state.prev1,
                             state.previousPrefabName,
+                            state.previousCandidateName,
                             state.samePrimaryTagStreak,
                             state.structuralBudgetState,
                             state.cumulativeLogScore,
@@ -1614,6 +1670,7 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
+        string previousCandidateName,
         int samePrimaryTagStreak,
         StructuralBudgetState structuralBudgetState,
         float cumulativeLogScore,
@@ -1630,6 +1687,7 @@ public class LevelGenerator : MonoBehaviour
             prev2 = prev1,
             prev1 = selectedTag,
             previousPrefabName = selected != null ? selected.SourceName : previousPrefabName,
+            previousCandidateName = selected != null ? selected.DisplayName : previousCandidateName,
             samePrimaryTagStreak = nextStreak,
             structuralBudgetState = AddCandidateToStructuralBudget(structuralBudgetState, selected),
             cumulativeLogScore = cumulativeLogScore + Mathf.Log(Mathf.Max(0.0001f, selectedWeight)),
@@ -1845,6 +1903,7 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
+        string previousCandidateName,
         int samePrimaryTagStreak,
         bool enforceExactRepeatRule,
         bool enforceTagStreakRule)
@@ -1863,6 +1922,9 @@ public class LevelGenerator : MonoBehaviour
                 continue;
 
             if (IsBlockedVerticalOppositePair(previousPrefabName, prefab.name))
+                continue;
+
+            if (IsBlockedConstrainedGeometryPair(previousCandidateName, prefab.name))
                 continue;
 
             if (enforceExactRepeatRule && avoidSamePrefabBackToBack && prefab.name == previousPrefabName)
@@ -2051,6 +2113,18 @@ public class LevelGenerator : MonoBehaviour
             candidate == "Chunk_VerticalUp_Tilemap";
 
         return upThenDown || downThenUp;
+    }
+
+    private bool IsBlockedConstrainedGeometryPair(string previousCandidateName, string candidatePrefabName)
+    {
+        string previous = NormalizePrefabName(previousCandidateName);
+        string candidate = NormalizePrefabName(candidatePrefabName);
+
+        bool exitHazardGapIntoMovingClimb =
+            previous.StartsWith("Generated_GapHazard_ExitOuterSpike") &&
+            candidate == "Chunk_MovingClimbSpikes_Tilemap";
+
+        return exitHazardGapIntoMovingClimb;
     }
 
     private string NormalizePrefabName(string prefabName)
@@ -2270,6 +2344,7 @@ public class LevelGenerator : MonoBehaviour
         public ChunkTag prev2;
         public ChunkTag prev1;
         public string previousPrefabName;
+        public string previousCandidateName;
         public int samePrimaryTagStreak;
         public StructuralBudgetState structuralBudgetState;
         public float cumulativeLogScore;

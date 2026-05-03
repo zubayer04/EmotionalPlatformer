@@ -367,6 +367,7 @@ MonoBehaviour:
   endPointPrefab: {fileID: 145256812549464630, guid: c444097fc2d5d417a9c857944096fa3f, type: 3}
   endPointOffset: {x: 0, y: 0, z: 0}
   clearBeforeGenerate: 1
+  generationMode: 0
   useGeneratedBlueprintChunks: 1
   useGeneratedBlueprintCandidateSelection: 1
   blueprintRuntimeBuilder: {fileID: 672173401}
@@ -711,7 +712,7 @@ MonoBehaviour:
   killZoneExtraBeyondEnds: 30
   deathsThisLevel: 0
   levelTimer: 0
-  adaptiveDifficultyEnabled: 0
+  adaptiveDifficultyEnabled: 1
   minTargetDifficulty: 1
   maxTargetDifficulty: 9
   targetDifficultyStep: 0.5

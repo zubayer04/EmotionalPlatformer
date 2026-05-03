@@ -49,6 +49,8 @@ public static class AdaptiveDifficultyController
         public float actualTargetDelta;
 
         public bool cleanRun;
+        public bool comfortRun;
+        public bool lowSignalDeathRun;
         public bool tooHard;
         public bool tooEasySingleRun;
         public bool tooEasyByStreak;
@@ -93,6 +95,16 @@ public static class AdaptiveDifficultyController
             performanceStrain <= 0.35f &&
             smoothedStrain <= 0.45f;
 
+        float lowSignalDeathThreshold = Mathf.Max(
+            settings.easyDeathsPerChunkThreshold,
+            settings.hardDeathsPerChunkThreshold * 0.5f);
+        bool lowSignalDeathRun =
+            input.deathsThisLevel == 1 &&
+            input.deathsPerChunk <= lowSignalDeathThreshold &&
+            input.timePerChunk < settings.fastTimePerChunkThreshold &&
+            lowPressure;
+        bool comfortRun = cleanRun || lowSignalDeathRun;
+
         bool easyPerformance =
             input.deathsPerChunk <= settings.easyDeathsPerChunkThreshold &&
             input.timePerChunk < settings.fastTimePerChunkThreshold;
@@ -103,7 +115,7 @@ public static class AdaptiveDifficultyController
             actualUndershoot;
 
         int requiredCleanRunStreak = Mathf.Max(1, settings.cleanRunStreakThreshold);
-        int cleanRunStreakAfter = cleanRun
+        int cleanRunStreakAfter = comfortRun
             ? input.cleanRunStreakBefore + 1
             : 0;
 
@@ -139,9 +151,8 @@ public static class AdaptiveDifficultyController
         {
             if (minorErrorGuardApplied)
             {
-                cleanRunStreakAfter = 0;
                 decisionCode = "keep_minor_error_content_overshot";
-                decisionText = "Single low-strain death with mild content overshoot -> keep target";
+                decisionText = "Single low-strain death with mild content overshoot -> keep target and preserve comfort streak";
             }
             else
             {
@@ -163,14 +174,14 @@ public static class AdaptiveDifficultyController
             cleanRunStreakAfter = 0;
             newTarget += settings.targetDifficultyStep;
             decisionCode = "increase_clean_streak";
-            decisionText = $"Clean low-strain streak ({requiredCleanRunStreak}) -> increase target";
+            decisionText = $"Low-strain comfort streak ({requiredCleanRunStreak}) -> increase target";
         }
         else if (tooEasyComfortStreak)
         {
             cleanRunStreakAfter = 0;
             newTarget += settings.targetDifficultyStep;
             decisionCode = "increase_comfort_streak_mild_overshoot";
-            decisionText = "Sustained low-strain clean play despite mild content overshoot -> increase target";
+            decisionText = "Sustained low-strain comfort despite mild content overshoot -> increase target";
         }
         else
         {
@@ -205,6 +216,8 @@ public static class AdaptiveDifficultyController
             smoothedStrain = smoothedStrain,
             actualTargetDelta = actualTargetDelta,
             cleanRun = cleanRun,
+            comfortRun = comfortRun,
+            lowSignalDeathRun = lowSignalDeathRun,
             tooHard = tooHard,
             tooEasySingleRun = tooEasySingleRun,
             tooEasyByStreak = tooEasyByStreak,

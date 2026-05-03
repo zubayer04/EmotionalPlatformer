@@ -135,6 +135,7 @@ def format_summary_line(run: dict[str, Any]) -> str:
         f"{run.get('runId', 'unknown')} | "
         f"seed={run.get('runSeed')} | "
         f"replay={run.get('isReplay', False)} | "
+        f"mode={run.get('generationMode', 'legacy')} | "
         f"target={fmt_num(target)} | "
         f"actual={fmt_num(actual)} | "
         f"delta={fmt_num(delta)} | "
@@ -159,6 +160,7 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
     print(f"Generated At: {run.get('generatedAtUtc', '-')}")
     print(f"Seed: {run.get('runSeed', '-')}")
     print(f"Replay: {run.get('isReplay', False)}")
+    print(f"Generation Mode: {run.get('generationMode', 'legacy')}")
     print(
         f"Target: {fmt_num(run.get('targetDifficultyBeforeRun'))} | "
         f"Actual: {fmt_num(run.get('actualLevelDifficultyScore'))} | "
@@ -222,6 +224,13 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
             f"deathCluster={fmt_num(adaptation.get('deathClusteringRatio'))} | "
             f"chunks={adaptation.get('behaviourChunksTraversed', '-')} | "
             f"frames={adaptation.get('behaviourTraversalFrames', '-')}"
+        )
+    if "comfortRun" in adaptation or "lowSignalDeathRun" in adaptation:
+        print(
+            "Comfort evidence: "
+            f"cleanRun={adaptation.get('cleanRun', '-')} | "
+            f"comfortRun={adaptation.get('comfortRun', '-')} | "
+            f"lowSignalDeath={adaptation.get('lowSignalDeathRun', '-')}"
         )
     if "markovLearningApplied" in adaptation:
         print(
@@ -541,14 +550,15 @@ def adaptation_audit_messages(runs: Iterable[dict[str, Any]]) -> list[str]:
 
         target_change = float(after) - float(before)
         clean_run = bool(adaptation.get("cleanRun"))
+        comfort_run = bool(adaptation.get("comfortRun", clean_run))
 
         if target_change > 0 and target_delta > 0.75:
             messages.append(
                 f"{run_id}: increased target despite delivered difficulty overshooting target by {target_delta:.2f}"
             )
-        elif target_change == 0 and clean_run and target_delta > 1.0:
+        elif target_change == 0 and comfort_run and target_delta > 1.0:
             messages.append(
-                f"{run_id}: clean run kept target while delivered difficulty overshot by {target_delta:.2f}"
+                f"{run_id}: comfort run kept target while delivered difficulty overshot by {target_delta:.2f}"
             )
         elif target_change < 0 and target_delta < -0.75:
             messages.append(
@@ -662,6 +672,7 @@ def print_calibration_evaluation(runs: list[dict[str, Any]]) -> None:
 def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
     print_header("Aggregate Summary")
     run_count = len(runs)
+    generation_mode_counter = Counter(run.get("generationMode", "legacy") or "legacy" for run in runs)
     avg_target = average(run.get("targetDifficultyBeforeRun") for run in runs)
     avg_actual = average(run.get("actualLevelDifficultyScore") for run in runs)
     avg_deaths = average(run.get("deathsThisLevel") for run in runs)
@@ -733,6 +744,7 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         f"Avg dpc: {fmt_num(avg_deaths_per_chunk)} | "
         f"Avg tpc: {fmt_num(avg_time_per_chunk)}"
     )
+    print_top_counter("Generation modes", generation_mode_counter, 10)
     print(
         f"Transition pressure: total={total_pressure_count} | "
         f"high={total_high_pressure_count} | "
