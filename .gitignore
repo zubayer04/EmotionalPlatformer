@@ -31,3 +31,7 @@ DerivedDataCache/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local agent/tool state
+.claude-flow/
+.swarm/
