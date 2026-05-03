@@ -23,6 +23,13 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
     [Header("Layer Settings")]
     [SerializeField] private string solidLayerName = "Ground";
 
+    [Header("Hazard Collider Tuning")]
+    [Tooltip("Generated spike trigger width as a fraction of one blueprint cell.")]
+    [SerializeField, Range(0.1f, 1f)] private float spikeColliderWidthScale = 0.9f;
+
+    [Tooltip("Generated spike trigger height as a fraction of one blueprint cell.")]
+    [SerializeField, Range(0.1f, 1f)] private float spikeColliderHeightScale = 0.4f;
+
     public GameObject BuildChunk(ChunkBlueprint blueprint, Vector3 origin)
     {
         if (blueprint == null)
@@ -391,7 +398,10 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
         BoxCollider2D col = go.AddComponent<BoxCollider2D>();
         col.isTrigger = true;
-        col.size = size;
+        float colliderWidth = size.x * spikeColliderWidthScale;
+        float colliderHeight = size.y * spikeColliderHeightScale;
+        col.size = new Vector2(colliderWidth, colliderHeight);
+        col.offset = new Vector2(0f, (colliderHeight - size.y) * 0.5f);
 
         go.AddComponent<Hazard>();
 

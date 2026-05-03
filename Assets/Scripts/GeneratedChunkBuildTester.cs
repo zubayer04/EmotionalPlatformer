@@ -186,11 +186,15 @@ public class GeneratedChunkBuildTester : MonoBehaviour
         if (generated.primaryTag != sampleRequest.requestedPrimaryTag)
             return $"tag_mismatch:{sampleRequest.requestedPrimaryTag}->{generated.primaryTag}";
 
-        if (generated.hasHazard != sampleRequest.sourceHasHazard)
+        bool controlledHazardAccent = IsGeneratedGapHazardAccent(sampleRequest, generated);
+
+        if (generated.hasHazard != sampleRequest.sourceHasHazard && !controlledHazardAccent)
             return $"hazard_mismatch:{sampleRequest.sourceHasHazard}->{generated.hasHazard}";
 
         int difficultyDelta = generated.difficultyRating - sampleRequest.sourceDifficulty;
-        if (Mathf.Abs(difficultyDelta) > 0 && !IsGeneratedSafeRestDifficultyEquivalent(sampleRequest, generated))
+        if (Mathf.Abs(difficultyDelta) > 0 &&
+            !IsGeneratedSafeRestDifficultyEquivalent(sampleRequest, generated) &&
+            !controlledHazardAccent)
             return $"difficulty_delta:{difficultyDelta:+#;-#;0}";
 
         int jumpsDelta = generated.estimatedJumps - sampleRequest.sourceEstimatedJumps;
@@ -214,6 +218,20 @@ public class GeneratedChunkBuildTester : MonoBehaviour
             return $"exit_delta_mismatch:({exitDeltaDiff.x:+0.##;-0.##;0},{exitDeltaDiff.y:+0.##;-0.##;0})";
 
         return "equivalent";
+    }
+
+    private bool IsGeneratedGapHazardAccent(ChunkGenerationRequest sampleRequest, ChunkBlueprint generated)
+    {
+        if (sampleRequest == null || generated == null)
+            return false;
+
+        return sampleRequest.requestedPrimaryTag == ChunkTag.Gap &&
+               generated.primaryTag == ChunkTag.Gap &&
+               !sampleRequest.sourceHasHazard &&
+               generated.hasHazard &&
+               generated.chunkName.StartsWith("Generated_GapHazard_") &&
+               generated.difficultyRating == sampleRequest.sourceDifficulty &&
+               generated.estimatedJumps == sampleRequest.sourceEstimatedJumps + 1;
     }
 
     private float GetGeneratedGapVerticalExitDeltaTolerance(ChunkGenerationRequest sampleRequest, ChunkBlueprint generated)

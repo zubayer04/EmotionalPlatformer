@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 9;
+    public const int SchemaVersion = 11;
 
     [Serializable]
     public class RunRecord
@@ -24,6 +24,9 @@ public static class LevelRunLog
         public bool useLookaheadSequencePlanning;
         public int lookaheadDepth;
         public int lookaheadBeamWidth;
+        public bool useStructuralBudgetPenalty;
+        public float structuralBudgetSlack;
+        public float structuralBudgetPenaltyStrength;
         public bool useGeneratedBlueprintChunks;
         public bool useGeneratedBlueprintCandidateSelection;
         public float generatedChunkReplacementChance;
@@ -73,6 +76,9 @@ public static class LevelRunLog
         public float lookaheadBestScore;
         public float lookaheadSelectionWeight;
         public string lookaheadDecisionSummary;
+        public float structuralBudgetWeight = 1f;
+        public float structuralBudgetProjectedLoad;
+        public float structuralBudgetAllowedLoad;
 
         public bool spawnSucceeded;
         public string spawnedChunkName;
@@ -176,6 +182,11 @@ public static class LevelRunLog
         public float markovLearningQuality;
         public float markovDeliveredTargetDelta;
         public int markovTransitionsUpdated;
+        public bool pressureAwareMarkovApplied;
+        public int pressureAwareMarkovTransitions;
+        public int pressureAwareMarkovMaxDeathsOnSlot;
+        public float pressureAwareMarkovPenaltyTotal;
+        public string pressureAwareMarkovReasons;
     }
 
     public static string GetLogDirectoryPath()

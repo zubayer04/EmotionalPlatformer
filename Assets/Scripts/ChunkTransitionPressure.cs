@@ -191,6 +191,12 @@ public static class ChunkTransitionPressure
         if (normalized.Contains("Chunk_Flat_Tilemap"))
             return Profile(High, High, 0f, 0f, 0f);
 
+        if (normalized.Contains("Generated_GapHazard_ExitOuterSpike"))
+            return Profile(High, Medium, Low, Medium, Medium, hasAwkwardExit: true);
+
+        if (normalized.Contains("Generated_GapHazard_EntryOuterSpike"))
+            return Profile(Medium, High, Medium, Low, Medium);
+
         if (normalized.Contains("Chunk_Gap_Tilemap") || normalized.Contains("Generated_Gap"))
             return Profile(High, High, Low, Low, Low);
 

@@ -17,4 +17,7 @@ public class ChunkGenerationRequest
     public int sourceEstimatedJumps = -1;
     public Vector2 sourceExitDelta = Vector2.zero;
     public int sourceMaxGapWidth = -1;
+
+    public bool forceGapHazardAccent = false;
+    public bool gapHazardAccentOnExitSide = false;
 }

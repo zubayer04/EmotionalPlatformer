@@ -188,6 +188,19 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
             f"depth={run.get('lookaheadDepth', '-')} | beam={run.get('lookaheadBeamWidth', '-')} | "
             f"used slots={lookahead_slots}"
         )
+    if "useStructuralBudgetPenalty" in run:
+        budget_penalized = sum(
+            1
+            for slot in run.get("slots", []) or []
+            if isinstance(slot.get("structuralBudgetWeight"), (int, float))
+            and float(slot.get("structuralBudgetWeight")) < 0.999
+        )
+        print(
+            f"Structural Budget: enabled={run.get('useStructuralBudgetPenalty')} | "
+            f"slack={fmt_num(run.get('structuralBudgetSlack'))} | "
+            f"strength={fmt_num(run.get('structuralBudgetPenaltyStrength'))} | "
+            f"penalized slots={budget_penalized}"
+        )
     print(
         f"Adaptation: {adaptation.get('decisionCode', '-') or '-'} | "
         f"{adaptation.get('decisionText', '-') or '-'} | "
@@ -219,6 +232,15 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
             f"delivered-target={fmt_num(adaptation.get('markovDeliveredTargetDelta'))} | "
             f"transitions={adaptation.get('markovTransitionsUpdated', '-')}"
         )
+        if "pressureAwareMarkovApplied" in adaptation:
+            print(
+                "Pressure-Aware Markov: "
+                f"applied={adaptation.get('pressureAwareMarkovApplied')} | "
+                f"transitions={adaptation.get('pressureAwareMarkovTransitions', 0)} | "
+                f"maxDeaths={adaptation.get('pressureAwareMarkovMaxDeathsOnSlot', 0)} | "
+                f"penalty={fmt_num(adaptation.get('pressureAwareMarkovPenaltyTotal'))} | "
+                f"reasons={adaptation.get('pressureAwareMarkovReasons', '-') or '-'}"
+            )
 
 
 def slot_rows_for_table(slots: Iterable[dict[str, Any]]) -> list[list[str]]:
@@ -244,6 +266,7 @@ def slot_rows_for_table(slots: Iterable[dict[str, Any]]) -> list[list[str]]:
                 slot.get("replacementMode", "-") or "-",
                 slot.get("replacementReason", "-") or "-",
                 slot.get("generatedRejectionReason", "-") or "-",
+                fmt_num(slot.get("structuralBudgetWeight")),
                 slot.get("transitionPressureSeverity", "-") or "-",
                 slot.get("transitionPressureReason", "-") or "-",
                 str(slot.get("deathsAttributedToSlot", 0)),
@@ -288,6 +311,7 @@ def print_latest_slot_table(run: dict[str, Any]) -> None:
         "genMode",
         "genReason",
         "validation",
+        "budgetW",
         "pressure",
         "pressureReason",
         "deaths",
@@ -662,6 +686,17 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         int(behaviour_field(run, "markovTransitionsUpdated") or 0)
         for run in runs
     )
+    pressure_aware_markov_count = sum(
+        1 for run in runs if behaviour_field(run, "pressureAwareMarkovApplied") is True
+    )
+    pressure_aware_markov_transitions = sum(
+        int(behaviour_field(run, "pressureAwareMarkovTransitions") or 0)
+        for run in runs
+    )
+    pressure_aware_markov_penalty = sum(
+        float(behaviour_field(run, "pressureAwareMarkovPenaltyTotal") or 0)
+        for run in runs
+    )
     total_pressure_count = sum(int(run.get("transitionPressureCount", 0) or 0) for run in runs)
     total_high_pressure_count = sum(int(run.get("highPressureTransitionCount", 0) or 0) for run in runs)
     lookahead_enabled_count = sum(1 for run in runs if run.get("useLookaheadSequencePlanning") is True)
@@ -676,6 +711,18 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         for run in runs
         for slot in run.get("slots", []) or []
         if slot.get("lookaheadUsed")
+    )
+    structural_budget_enabled_count = sum(1 for run in runs if run.get("useStructuralBudgetPenalty") is True)
+    structural_budget_penalized_slots = [
+        slot
+        for run in runs
+        for slot in run.get("slots", []) or []
+        if isinstance(slot.get("structuralBudgetWeight"), (int, float))
+        and float(slot.get("structuralBudgetWeight")) < 0.999
+    ]
+    avg_structural_budget_weight = average(
+        slot.get("structuralBudgetWeight")
+        for slot in structural_budget_penalized_slots
     )
 
     print(
@@ -695,6 +742,12 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         f"Lookahead sequencing: enabled runs={lookahead_enabled_count}/{run_count} | "
         f"selected slots={lookahead_slot_count} | avg best score={fmt_num(avg_lookahead_score)}"
     )
+    if structural_budget_enabled_count > 0 or structural_budget_penalized_slots:
+        print(
+            f"Structural budget: enabled runs={structural_budget_enabled_count}/{run_count} | "
+            f"penalized slots={len(structural_budget_penalized_slots)} | "
+            f"avg penalized weight={fmt_num(avg_structural_budget_weight)}"
+        )
     print(
         f"Behavioural signals: engagement={fmt_num(avg_engagement)} | "
         f"hesitation={fmt_num(avg_hesitation)} | momentum={fmt_num(avg_momentum)} | "
@@ -706,6 +759,12 @@ def print_aggregate_summary(runs: list[dict[str, Any]]) -> None:
         f"positive caps={markov_capped_count} | avg quality={fmt_num(avg_markov_quality)} | "
         f"transition updates={markov_transition_updates}"
     )
+    if pressure_aware_markov_count > 0 or pressure_aware_markov_transitions > 0:
+        print(
+            f"Pressure-aware Markov: applied runs={pressure_aware_markov_count}/{run_count} | "
+            f"transitions={pressure_aware_markov_transitions} | "
+            f"penalty total={fmt_num(pressure_aware_markov_penalty)}"
+        )
 
     selected_counter: Counter[str] = Counter()
     selected_candidate_type_counter: Counter[str] = Counter()

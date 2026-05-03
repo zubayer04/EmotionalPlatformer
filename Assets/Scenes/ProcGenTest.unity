@@ -382,6 +382,9 @@ MonoBehaviour:
   useLookaheadSequencePlanning: 1
   lookaheadDepth: 2
   lookaheadBeamWidth: 4
+  useStructuralBudgetPenalty: 1
+  structuralBudgetSlack: 0.6
+  structuralBudgetPenaltyStrength: 0.8
   avoidSamePrefabBackToBack: 1
   maxSamePrimaryTagStreak: 2
   targetDifficulty: 5
@@ -464,6 +467,8 @@ MonoBehaviour:
     estimatedJumps: 0
     tags: 
   solidLayerName: Ground
+  spikeColliderWidthScale: 0.9
+  spikeColliderHeightScale: 0.4
 --- !u!4 &672173402
 Transform:
   m_ObjectHideFlags: 0
@@ -697,13 +702,16 @@ MonoBehaviour:
   behaviourTracker: {fileID: 0}
   markovLearningRate: 0.05
   markovDecayRate: 0.02
+  pressureAwareMarkovLearningEnabled: 1
+  pressureAwareMarkovDeathThreshold: 3
+  pressureAwareMarkovPenalty: 0.8
   killZoneTransform: {fileID: 573772443}
   killZonePaddingBelowGround: 6
   killZoneExtraWidth: 20
   killZoneExtraBeyondEnds: 30
   deathsThisLevel: 0
   levelTimer: 0
-  adaptiveDifficultyEnabled: 1
+  adaptiveDifficultyEnabled: 0
   minTargetDifficulty: 1
   maxTargetDifficulty: 9
   targetDifficultyStep: 0.5
@@ -1217,7 +1225,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GeneratedChunkBuildTester
   builder: {fileID: 672173401}
-  sourceChunkPrefab: {fileID: 8418884132628795399, guid: 3781df74d421942da9a0cb86875791f3, type: 3}
+  sourceChunkPrefab: {fileID: 8082044248489940904, guid: 518c5051cfe224869a035c322017c31f, type: 3}
   request:
     requestedPrimaryTag: 3
     targetDifficulty: 2
@@ -1231,6 +1239,8 @@ MonoBehaviour:
     sourceEstimatedJumps: -1
     sourceExitDelta: {x: 0, y: 0}
     sourceMaxGapWidth: -1
+    forceGapHazardAccent: 0
+    gapHazardAccentOnExitSide: 0
   buildOnStart: 0
   buildBatchOnStart: 0
   sampleCount: 15

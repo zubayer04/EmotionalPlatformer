@@ -31,6 +31,11 @@ public class LevelManager : MonoBehaviour
         public float markovLearningQuality;
         public float markovDeliveredTargetDelta;
         public int markovTransitionsUpdated;
+        public bool pressureAwareMarkovApplied;
+        public int pressureAwareMarkovTransitions;
+        public int pressureAwareMarkovMaxDeathsOnSlot;
+        public float pressureAwareMarkovPenaltyTotal;
+        public string pressureAwareMarkovReasons;
     }
 
     [Header("References")]
@@ -45,6 +50,15 @@ public class LevelManager : MonoBehaviour
 
     [Tooltip("How much learned weights decay toward baseline after each level (prevents drift).")]
     [Range(0f, 0.2f)] [SerializeField] private float markovDecayRate = 0.02f;
+
+    [Tooltip("Only add an extra Markov penalty when repeated deaths confirm an already pressure-penalized transition.")]
+    [SerializeField] private bool pressureAwareMarkovLearningEnabled = true;
+
+    [Tooltip("Deaths on the receiving slot required before pressure-aware Markov learning is applied.")]
+    [Range(1, 5)] [SerializeField] private int pressureAwareMarkovDeathThreshold = 3;
+
+    [Tooltip("Extra negative quality applied when pressure-aware Markov learning is triggered.")]
+    [Range(0f, 2f)] [SerializeField] private float pressureAwareMarkovPenalty = 0.8f;
 
     [Header("KillZone")]
     [Tooltip("Assign your KillZone object here (the one with BoxCollider2D + KillZone.cs). If left empty, we'll try to find it.")]
@@ -501,6 +515,18 @@ public class LevelManager : MonoBehaviour
                 if (slot.deathsAttributedToSlot > 0)
                     slotQuality -= 0.2f * Mathf.Min(slot.deathsAttributedToSlot, 3);
 
+                if (ShouldApplyPressureAwareMarkovPenalty(slot))
+                {
+                    slotQuality -= pressureAwareMarkovPenalty;
+                    audit.pressureAwareMarkovApplied = true;
+                    audit.pressureAwareMarkovTransitions++;
+                    audit.pressureAwareMarkovPenaltyTotal += pressureAwareMarkovPenalty;
+                    audit.pressureAwareMarkovMaxDeathsOnSlot = Mathf.Max(
+                        audit.pressureAwareMarkovMaxDeathsOnSlot,
+                        slot.deathsAttributedToSlot);
+                    AddPressureAwareReason(ref audit, slot.transitionPressureReason);
+                }
+
                 table.UpdateWeight(prev2, prev1, currentTag, band, slotQuality, markovLearningRate);
                 audit.markovTransitionsUpdated++;
             }
@@ -519,6 +545,41 @@ public class LevelManager : MonoBehaviour
         return audit;
     }
 
+    private bool ShouldApplyPressureAwareMarkovPenalty(LevelRunLog.SlotRecord slot)
+    {
+        if (!pressureAwareMarkovLearningEnabled || pressureAwareMarkovPenalty <= 0f)
+            return false;
+
+        if (slot == null || !slot.transitionPressurePenalized)
+            return false;
+
+        if (slot.deathsAttributedToSlot < Mathf.Max(1, pressureAwareMarkovDeathThreshold))
+            return false;
+
+        return IsStrongOrSeverePressure(slot.transitionPressureSeverity);
+    }
+
+    private bool IsStrongOrSeverePressure(string severity)
+    {
+        return severity == "strong" || severity == "severe";
+    }
+
+    private void AddPressureAwareReason(ref MarkovLearningAudit audit, string reason)
+    {
+        if (string.IsNullOrEmpty(reason))
+            reason = "unknown_pressure";
+
+        if (string.IsNullOrEmpty(audit.pressureAwareMarkovReasons))
+        {
+            audit.pressureAwareMarkovReasons = reason;
+            return;
+        }
+
+        string paddedReasons = "|" + audit.pressureAwareMarkovReasons + "|";
+        if (!paddedReasons.Contains("|" + reason + "|"))
+            audit.pressureAwareMarkovReasons += "|" + reason;
+    }
+
     private void ApplyMarkovLearningAudit(LevelRunLog.AdaptationRecord record, MarkovLearningAudit audit)
     {
         if (record == null)
@@ -529,6 +590,11 @@ public class LevelManager : MonoBehaviour
         record.markovLearningQuality = audit.markovLearningQuality;
         record.markovDeliveredTargetDelta = audit.markovDeliveredTargetDelta;
         record.markovTransitionsUpdated = audit.markovTransitionsUpdated;
+        record.pressureAwareMarkovApplied = audit.pressureAwareMarkovApplied;
+        record.pressureAwareMarkovTransitions = audit.pressureAwareMarkovTransitions;
+        record.pressureAwareMarkovMaxDeathsOnSlot = audit.pressureAwareMarkovMaxDeathsOnSlot;
+        record.pressureAwareMarkovPenaltyTotal = audit.pressureAwareMarkovPenaltyTotal;
+        record.pressureAwareMarkovReasons = audit.pressureAwareMarkovReasons;
     }
 
     private LevelRunLog.AdaptationRecord UpdateTargetDifficulty(float deathsPerChunk, float timePerChunk, BehaviourSummary behaviour)

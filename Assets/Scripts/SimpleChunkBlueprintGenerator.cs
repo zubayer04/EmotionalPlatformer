@@ -210,62 +210,119 @@ public static class SimpleChunkBlueprintGenerator
         int leftSize = ChooseLeftSupportSize(supportBudget, preferredMinimumLanding);
         int rightSize = supportBudget - leftSize;
 
+        int maxLandingYOffset = GetMaxLandingYOffset(request);
+        int landingYOffset = Random.Range(-maxLandingYOffset, maxLandingYOffset + 1);
+
+        bool hazardGap = ShouldGenerateHazardAccentGap(request);
+
+        if (hazardGap)
+        {
+            bool placeOnExitSide = request.forceGapHazardAccent
+                ? request.gapHazardAccentOnExitSide
+                : Random.Range(0, 2) == 0;
+            return GenerateHazardAccentGap(request, gapSize, leftSize, rightSize, placeOnExitSide);
+        }
+
         string leftPart = "E" + new string('#', leftSize);
         string gapPart = new string('.', gapSize);
         string rightPart = new string('#', rightSize) + "X";
         string bottomRow = leftPart + gapPart + rightPart;
         string variantName = GetGapVariantName(leftSize, rightSize);
-        int maxLandingYOffset = GetMaxLandingYOffset(request);
-        int landingYOffset = Random.Range(-maxLandingYOffset, maxLandingYOffset + 1);
-
-        bool hazardGap = request.requireHazard && request.targetDifficulty >= 3;
-
-        if (!hazardGap)
-        {
-            int entryRow;
-            int exitRow;
-            List<string> rows = BuildGapRows(width, leftSize, gapSize, rightSize, bottomRow, landingYOffset, out entryRow, out exitRow);
-
-            return new ChunkBlueprint
-            {
-                chunkName = $"{variantName}_{GetLandingOffsetName(landingYOffset)}",
-                width = width,
-                height = rows.Count,
-                rows = rows,
-                entryCell = new Vector2Int(0, entryRow),
-                exitCell = new Vector2Int(width - 1, exitRow),
-                primaryTag = ChunkTag.Gap,
-                difficultyRating = Mathf.Clamp(request.targetDifficulty, 2, 5),
-                hasHazard = false,
-                estimatedJumps = 1,
-                tags = new ChunkTag[] { ChunkTag.Gap }
-            };
-        }
-
-        // Hazard gap variant:
-        // Put spikes on the right landing platform instead of floating above the gap.
-        string topRow =
-            new string('.', leftPart.Length + gapPart.Length) +
-            new string('S', rightSize) +
-            ".";
+        int entryRow;
+        int exitRow;
+        List<string> rows = BuildGapRows(width, leftSize, gapSize, rightSize, bottomRow, landingYOffset, out entryRow, out exitRow);
 
         return new ChunkBlueprint
         {
-            chunkName = variantName + "_Hazard",
+            chunkName = $"{variantName}_{GetLandingOffsetName(landingYOffset)}",
             width = width,
-            height = 3,
+            height = rows.Count,
+            rows = rows,
+            entryCell = new Vector2Int(0, entryRow),
+            exitCell = new Vector2Int(width - 1, exitRow),
+            primaryTag = ChunkTag.Gap,
+            difficultyRating = Mathf.Clamp(request.targetDifficulty, 2, 5),
+            hasHazard = false,
+            estimatedJumps = 1,
+            tags = new ChunkTag[] { ChunkTag.Gap }
+        };
+    }
+
+    private static bool ShouldGenerateHazardAccentGap(ChunkGenerationRequest request)
+    {
+        if (request == null ||
+            !request.hasSourceContext ||
+            request.requestedPrimaryTag != ChunkTag.Gap ||
+            request.sourceHasHazard ||
+            request.sourceMaxGapWidth <= 0)
+        {
+            return false;
+        }
+
+        if (request.forceGapHazardAccent)
+            return true;
+
+        // Keep hazard-accented gaps as occasional variety rather than redefining the gap family.
+        return request.targetDifficulty >= 2 && Random.Range(0, 4) == 0;
+    }
+
+    private static ChunkBlueprint GenerateHazardAccentGap(
+        ChunkGenerationRequest request,
+        int gapSize,
+        int baseLeftSize,
+        int baseRightSize,
+        bool placeOnExitSide)
+    {
+        const int safeTilesBesideOuterSpike = 3;
+        int leftSize = Mathf.Max(2, baseLeftSize);
+        int rightSize = Mathf.Max(2, baseRightSize);
+
+        if (placeOnExitSide)
+            rightSize = Mathf.Max(rightSize, safeTilesBesideOuterSpike + 1);
+        else
+            leftSize = Mathf.Max(leftSize, safeTilesBesideOuterSpike + 1);
+
+        int width = 2 + leftSize + gapSize + rightSize;
+        char[] hazardRow = new string('.', width).ToCharArray();
+        string bottomRow =
+            "E" +
+            new string('#', leftSize) +
+            new string('.', gapSize) +
+            new string('#', rightSize) +
+            "X";
+
+        int spikeX;
+        string sideName;
+        if (placeOnExitSide)
+        {
+            int rightStart = 1 + leftSize + gapSize;
+            spikeX = rightStart + rightSize - 1;
+            sideName = "ExitOuterSpike";
+        }
+        else
+        {
+            spikeX = 1;
+            sideName = "EntryOuterSpike";
+        }
+
+        hazardRow[spikeX] = 'S';
+
+        return new ChunkBlueprint
+        {
+            chunkName = $"Generated_GapHazard_{sideName}",
+            width = width,
+            height = 2,
             rows = new List<string>
             {
-                new string('.', width),
-                topRow,
+                new string(hazardRow),
                 bottomRow
             },
-            entryCell = new Vector2Int(0, 2),
-            exitCell = new Vector2Int(width - 1, 2),
+            entryCell = new Vector2Int(0, 1),
+            exitCell = new Vector2Int(width - 1, 1),
             primaryTag = ChunkTag.Gap,
-            difficultyRating = Mathf.Clamp(request.targetDifficulty, 3, 6),
+            difficultyRating = Mathf.Clamp(request.sourceDifficulty, 2, 5),
             hasHazard = true,
-            estimatedJumps = 1,
+            estimatedJumps = Mathf.Max(1, request.sourceEstimatedJumps + 1),
             tags = new ChunkTag[] { ChunkTag.Gap, ChunkTag.Spikes }
         };
     }

@@ -320,17 +320,20 @@ public class ChunkCalibrationReporterWindow : EditorWindow
             ChunkBlueprintFeatures features = ChunkBlueprintFeatureExtractor.Analyze(generated);
             Vector2 estimatedExitDelta = features.estimatedExitDelta;
             Vector2 estimatedExitDeltaDelta = estimatedExitDelta - source.exitDelta;
+            bool controlledHazardAccent = IsGeneratedGapHazardAccent(source, generated);
 
             string status = "Equivalent";
             List<string> reasons = new List<string>();
 
             if (!tagMatch)
                 reasons.Add("primary tag differs");
-            if (difficultyDelta != 0 && !IsGeneratedSafeRestDifficultyEquivalent(source, generated))
+            if (difficultyDelta != 0 &&
+                !IsGeneratedSafeRestDifficultyEquivalent(source, generated) &&
+                !controlledHazardAccent)
                 reasons.Add($"difficulty delta {difficultyDelta:+#;-#;0}");
-            if (jumpsDelta != 0)
+            if (jumpsDelta != 0 && !controlledHazardAccent)
                 reasons.Add($"jumps delta {jumpsDelta:+#;-#;0}");
-            if (!hazardMatch)
+            if (!hazardMatch && !controlledHazardAccent)
                 reasons.Add("hazard flag differs");
             if (source.maxGapWidth > 0 && generated.primaryTag == ChunkTag.Gap && features.maxGapWidth != source.maxGapWidth)
                 reasons.Add($"max gap delta {features.maxGapWidth - source.maxGapWidth:+#;-#;0}");
@@ -344,9 +347,15 @@ public class ChunkCalibrationReporterWindow : EditorWindow
 
             if (reasons.Count > 0)
                 status = reasons.Count == 1 ? "Close" : "Needs Review";
+            else if (controlledHazardAccent)
+                status = "Controlled Variant";
 
-            string reason = reasons.Count > 0 ? string.Join("; ", reasons) : "metadata matches";
-            if (status != "Equivalent")
+            string reason = reasons.Count > 0
+                ? string.Join("; ", reasons)
+                : controlledHazardAccent
+                    ? "controlled hazard-accent gap variant"
+                    : "metadata matches";
+            if (status != "Equivalent" && status != "Controlled Variant")
             {
                 replacementReviewCount++;
                 warnings.Add($"Generated candidate equivalence: {source.name} -> {generated.chunkName}: {reason}.");
@@ -1067,6 +1076,20 @@ public class ChunkCalibrationReporterWindow : EditorWindow
                !source.hasHazard &&
                source.estimatedJumps == 0 &&
                generated.difficultyRating == source.difficultyRating + 1;
+    }
+
+    private static bool IsGeneratedGapHazardAccent(ChunkRecord source, ChunkBlueprint generated)
+    {
+        if (generated == null)
+            return false;
+
+        return source.primaryTag == ChunkTag.Gap &&
+               generated.primaryTag == ChunkTag.Gap &&
+               !source.hasHazard &&
+               generated.hasHazard &&
+               generated.chunkName.StartsWith("Generated_GapHazard_") &&
+               generated.difficultyRating == source.difficultyRating &&
+               generated.estimatedJumps == source.estimatedJumps + 1;
     }
 
     private static float GetGeneratedSafeVerticalExitDeltaTolerance(ChunkRecord source, ChunkBlueprint generated)

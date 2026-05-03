@@ -72,6 +72,16 @@ public class LevelGenerator : MonoBehaviour
     [Tooltip("How many partial future sequences are kept at each lookahead step.")]
     [Range(1, 6)] public int lookaheadBeamWidth = 4;
 
+    [Header("Structural Budget Awareness")]
+    [Tooltip("Softly down-weight candidates when hazards, jumps, and vertical chunks are already above the target-appropriate whole-level budget.")]
+    public bool useStructuralBudgetPenalty = true;
+
+    [Tooltip("Extra additive structural score tolerated beyond the target-derived budget before penalties become strong.")]
+    [Range(0f, 2f)] public float structuralBudgetSlack = 0.6f;
+
+    [Tooltip("How strongly candidates are down-weighted once the soft whole-level structural budget is exceeded.")]
+    [Range(0f, 2f)] public float structuralBudgetPenaltyStrength = 0.8f;
+
     [Tooltip("Avoid spawning the exact same prefab twice in a row.")]
     public bool avoidSamePrefabBackToBack = true;
 
@@ -138,6 +148,9 @@ public class LevelGenerator : MonoBehaviour
         public float lookaheadBestScore;
         public float lookaheadSelectionWeight;
         public string lookaheadDecisionSummary = "none";
+        public float structuralBudgetWeight = 1f;
+        public float structuralBudgetProjectedLoad;
+        public float structuralBudgetAllowedLoad;
 
         public bool IsGenerated => blueprint != null;
 
@@ -216,6 +229,35 @@ public class LevelGenerator : MonoBehaviour
                 ChunkData data = SourceData;
                 return data != null ? data.exitDelta : Vector2.zero;
             }
+        }
+
+        public bool HasTag(ChunkTag tag)
+        {
+            if (PrimaryTag == tag)
+                return true;
+
+            if (IsGenerated && blueprint.tags != null)
+            {
+                for (int i = 0; i < blueprint.tags.Length; i++)
+                {
+                    if (blueprint.tags[i] == tag)
+                        return true;
+                }
+
+                return false;
+            }
+
+            ChunkData data = SourceData;
+            if (data == null || data.tags == null)
+                return false;
+
+            for (int i = 0; i < data.tags.Length; i++)
+            {
+                if (data.tags[i] == tag)
+                    return true;
+            }
+
+            return false;
         }
     }
 
@@ -404,6 +446,9 @@ public class LevelGenerator : MonoBehaviour
             useLookaheadSequencePlanning = useLookaheadSequencePlanning,
             lookaheadDepth = lookaheadDepth,
             lookaheadBeamWidth = lookaheadBeamWidth,
+            useStructuralBudgetPenalty = useStructuralBudgetPenalty,
+            structuralBudgetSlack = structuralBudgetSlack,
+            structuralBudgetPenaltyStrength = structuralBudgetPenaltyStrength,
             useGeneratedBlueprintChunks = useGeneratedBlueprintChunks,
             useGeneratedBlueprintCandidateSelection = useGeneratedBlueprintCandidateSelection,
             generatedChunkReplacementChance = generatedChunkReplacementChance,
@@ -430,10 +475,13 @@ public class LevelGenerator : MonoBehaviour
 
         string previousPrefabName = string.Empty;
         int samePrimaryTagStreak = 0;
+        StructuralBudgetState structuralBudgetState = default;
 
         if (startingChunkPrefab != null && remainingChunks > 0)
         {
-            sequence.Add(CreateHandcraftedCandidate(startingChunkPrefab));
+            ChunkSelectionCandidate startingCandidate = CreateHandcraftedCandidate(startingChunkPrefab);
+            sequence.Add(startingCandidate);
+            structuralBudgetState = AddCandidateToStructuralBudget(structuralBudgetState, startingCandidate);
 
             ChunkData startData = startingChunkPrefab.GetComponent<ChunkData>();
             if (startData != null)
@@ -451,7 +499,13 @@ public class LevelGenerator : MonoBehaviour
         {
             if (chunkPrefabs == null || chunkPrefabs.Length == 0) break;
 
-            ChunkSelectionCandidate candidate = SelectNextChunkCandidate(prev2, prev1, previousPrefabName, samePrimaryTagStreak, i);
+            ChunkSelectionCandidate candidate = SelectNextChunkCandidate(
+                prev2,
+                prev1,
+                previousPrefabName,
+                samePrimaryTagStreak,
+                i,
+                structuralBudgetState);
             if (candidate == null)
             {
                 Debug.LogWarning("LevelGenerator: No valid next chunk prefab could be selected.");
@@ -459,6 +513,7 @@ public class LevelGenerator : MonoBehaviour
             }
 
             sequence.Add(candidate);
+            structuralBudgetState = AddCandidateToStructuralBudget(structuralBudgetState, candidate);
 
             ChunkTag selectedTag = candidate.PrimaryTag;
             if (selectedTag == prev1)
@@ -835,14 +890,18 @@ public class LevelGenerator : MonoBehaviour
             return false;
         }
 
-        if (generated.hasHazard != source.hasHazard)
+        bool controlledHazardAccent = IsGeneratedGapHazardAccent(source, generated);
+
+        if (generated.hasHazard != source.hasHazard && !controlledHazardAccent)
         {
             rejectionReason = $"hazard_mismatch:{source.hasHazard}->{generated.hasHazard}";
             return false;
         }
 
         int difficultyDelta = generated.difficultyRating - source.difficultyRating;
-        if (Mathf.Abs(difficultyDelta) > 0 && !IsGeneratedSafeRestDifficultyEquivalent(source, generated))
+        if (Mathf.Abs(difficultyDelta) > 0 &&
+            !IsGeneratedSafeRestDifficultyEquivalent(source, generated) &&
+            !controlledHazardAccent)
         {
             rejectionReason = $"difficulty_delta:{difficultyDelta:+#;-#;0}";
             return false;
@@ -879,6 +938,20 @@ public class LevelGenerator : MonoBehaviour
         }
 
         return true;
+    }
+
+    private bool IsGeneratedGapHazardAccent(ChunkData source, ChunkBlueprint generated)
+    {
+        if (source == null || generated == null)
+            return false;
+
+        return source.primaryTag == ChunkTag.Gap &&
+               generated.primaryTag == ChunkTag.Gap &&
+               !source.hasHazard &&
+               generated.hasHazard &&
+               generated.chunkName.StartsWith("Generated_GapHazard_") &&
+               generated.difficultyRating == source.difficultyRating &&
+               generated.estimatedJumps == source.estimatedJumps + 1;
     }
 
     private float GetGeneratedGapVerticalExitDeltaTolerance(ChunkGenerationRequest request, ChunkBlueprint generated)
@@ -982,6 +1055,9 @@ public class LevelGenerator : MonoBehaviour
         record.lookaheadBestScore = candidate.lookaheadBestScore;
         record.lookaheadSelectionWeight = candidate.lookaheadSelectionWeight;
         record.lookaheadDecisionSummary = candidate.lookaheadDecisionSummary;
+        record.structuralBudgetWeight = candidate.structuralBudgetWeight;
+        record.structuralBudgetProjectedLoad = candidate.structuralBudgetProjectedLoad;
+        record.structuralBudgetAllowedLoad = candidate.structuralBudgetAllowedLoad;
 
         return record;
     }
@@ -1204,7 +1280,8 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev1,
         string previousPrefabName,
         int samePrimaryTagStreak,
-        int slotIndex)
+        int slotIndex,
+        StructuralBudgetState structuralBudgetState)
     {
         List<ChunkSelectionCandidate> candidates = GetSelectableCandidates(
             prev2,
@@ -1227,13 +1304,14 @@ public class LevelGenerator : MonoBehaviour
                 previousPrefabName,
                 samePrimaryTagStreak,
                 slotIndex,
-                remainingSlots);
+                remainingSlots,
+                structuralBudgetState);
 
             if (lookaheadCandidate != null)
                 return lookaheadCandidate;
         }
 
-        return SelectWeightedImmediateCandidate(candidates, prev2, prev1, previousPrefabName, slotIndex);
+        return SelectWeightedImmediateCandidate(candidates, prev2, prev1, previousPrefabName, slotIndex, structuralBudgetState);
     }
 
     private List<ChunkSelectionCandidate> GetSelectableCandidates(
@@ -1264,7 +1342,8 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
-        int slotIndex)
+        int slotIndex,
+        StructuralBudgetState structuralBudgetState)
     {
         float totalWeight = 0f;
         List<float> weights = new List<float>(candidates.Count);
@@ -1272,7 +1351,13 @@ public class LevelGenerator : MonoBehaviour
         for (int i = 0; i < candidates.Count; i++)
         {
             ChunkSelectionCandidate candidate = candidates[i];
-            float finalWeight = CalculateCandidateSelectionWeight(candidate, prev2, prev1, previousPrefabName, slotIndex);
+            float finalWeight = CalculateCandidateSelectionWeight(
+                candidate,
+                prev2,
+                prev1,
+                previousPrefabName,
+                slotIndex,
+                structuralBudgetState);
             weights.Add(finalWeight);
             totalWeight += finalWeight;
         }
@@ -1321,7 +1406,8 @@ public class LevelGenerator : MonoBehaviour
         string previousPrefabName,
         int samePrimaryTagStreak,
         int slotIndex,
-        int remainingSlots)
+        int remainingSlots,
+        StructuralBudgetState structuralBudgetState)
     {
         int depth = Mathf.Clamp(lookaheadDepth, 1, Mathf.Min(3, remainingSlots));
         int beamWidth = Mathf.Max(1, lookaheadBeamWidth);
@@ -1334,7 +1420,13 @@ public class LevelGenerator : MonoBehaviour
         for (int i = 0; i < currentCandidates.Count; i++)
         {
             ChunkSelectionCandidate candidate = currentCandidates[i];
-            float weight = CalculateCandidateSelectionWeight(candidate, prev2, prev1, previousPrefabName, slotIndex);
+            float weight = CalculateCandidateSelectionWeight(
+                candidate,
+                prev2,
+                prev1,
+                previousPrefabName,
+                slotIndex,
+                structuralBudgetState);
             float immediateScore = Mathf.Log(Mathf.Max(0.0001f, weight));
             immediateChoices.Add(new LookaheadCandidateChoice
             {
@@ -1349,6 +1441,7 @@ public class LevelGenerator : MonoBehaviour
                 prev1,
                 previousPrefabName,
                 samePrimaryTagStreak,
+                structuralBudgetState,
                 0f,
                 candidate,
                 weight,
@@ -1389,7 +1482,8 @@ public class LevelGenerator : MonoBehaviour
                             state.prev2,
                             state.prev1,
                             state.previousPrefabName,
-                            futureSlotIndex);
+                            futureSlotIndex,
+                            state.structuralBudgetState);
 
                         expanded.Add(CreateAdvancedLookaheadState(
                             state.firstCandidate,
@@ -1397,6 +1491,7 @@ public class LevelGenerator : MonoBehaviour
                             state.prev1,
                             state.previousPrefabName,
                             state.samePrimaryTagStreak,
+                            state.structuralBudgetState,
                             state.cumulativeLogScore,
                             futureCandidate,
                             futureWeight,
@@ -1453,7 +1548,8 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev2,
         ChunkTag prev1,
         string previousPrefabName,
-        int slotIndex)
+        int slotIndex,
+        StructuralBudgetState structuralBudgetState)
     {
         if (candidate == null || candidate.sourcePrefab == null)
             return 0.01f;
@@ -1497,8 +1593,19 @@ public class LevelGenerator : MonoBehaviour
             slotTargetDifficulty,
             targetDifficulty);
 
+        float structuralBudgetWeight = GetStructuralBudgetWeight(
+            candidate,
+            structuralBudgetState,
+            out float projectedStructuralLoad,
+            out float allowedStructuralLoad);
+
+        candidate.structuralBudgetWeight = structuralBudgetWeight;
+        candidate.structuralBudgetProjectedLoad = projectedStructuralLoad;
+        candidate.structuralBudgetAllowedLoad = allowedStructuralLoad;
+
         float finalWeight = transitionWeight * difficultyWeight * varietyWeight * pacingWeight *
-                            extremeOutlierWeight * transitionPressureWeight * candidate.sourceFamilyWeight;
+                            extremeOutlierWeight * transitionPressureWeight * structuralBudgetWeight *
+                            candidate.sourceFamilyWeight;
         return Mathf.Max(0.01f, finalWeight);
     }
 
@@ -1508,6 +1615,7 @@ public class LevelGenerator : MonoBehaviour
         ChunkTag prev1,
         string previousPrefabName,
         int samePrimaryTagStreak,
+        StructuralBudgetState structuralBudgetState,
         float cumulativeLogScore,
         ChunkSelectionCandidate selected,
         float selectedWeight,
@@ -1523,6 +1631,7 @@ public class LevelGenerator : MonoBehaviour
             prev1 = selectedTag,
             previousPrefabName = selected != null ? selected.SourceName : previousPrefabName,
             samePrimaryTagStreak = nextStreak,
+            structuralBudgetState = AddCandidateToStructuralBudget(structuralBudgetState, selected),
             cumulativeLogScore = cumulativeLogScore + Mathf.Log(Mathf.Max(0.0001f, selectedWeight)),
             selectedCount = selectedCount
         };
@@ -1649,6 +1758,89 @@ public class LevelGenerator : MonoBehaviour
         return extremeForLevel || extremeForSlot ? 0.35f : 1f;
     }
 
+    private float GetStructuralBudgetWeight(
+        ChunkSelectionCandidate candidate,
+        StructuralBudgetState currentState,
+        out float projectedStructuralLoad,
+        out float allowedStructuralLoad)
+    {
+        StructuralBudgetState projectedState = AddCandidateToStructuralBudget(currentState, candidate);
+        projectedStructuralLoad = GetStructuralAdditiveLoad(projectedState);
+        allowedStructuralLoad = GetAllowedStructuralAdditiveLoad(projectedState.selectedChunks);
+
+        if (!useStructuralBudgetPenalty || structuralBudgetPenaltyStrength <= 0f)
+            return 1f;
+
+        float excess = projectedStructuralLoad - allowedStructuralLoad;
+        if (excess <= 0f)
+            return 1f;
+
+        float penalty = Mathf.Exp(-structuralBudgetPenaltyStrength * excess * excess);
+        return Mathf.Clamp(penalty, 0.2f, 1f);
+    }
+
+    private StructuralBudgetState AddCandidateToStructuralBudget(
+        StructuralBudgetState state,
+        ChunkSelectionCandidate candidate)
+    {
+        if (candidate == null)
+            return state;
+
+        state.selectedChunks++;
+
+        bool hasHazard = candidate.HasHazard;
+        bool hasSpikeTag = candidate.HasTag(ChunkTag.Spikes);
+        if (hasHazard || hasSpikeTag)
+            state.hazardChunks++;
+
+        state.estimatedJumps += Mathf.Max(0, candidate.EstimatedJumps);
+
+        if (candidate.PrimaryTag == ChunkTag.Vertical || candidate.HasTag(ChunkTag.Vertical))
+            state.verticalChunks++;
+
+        return state;
+    }
+
+    private float GetStructuralAdditiveLoad(StructuralBudgetState state)
+    {
+        return (wHazardChunk * state.hazardChunks) +
+               (wEstimatedJump * state.estimatedJumps) +
+               (wVerticalChunk * state.verticalChunks);
+    }
+
+    private float GetAllowedStructuralAdditiveLoad(int projectedSelectedChunks)
+    {
+        int configuredChunks = Mathf.Max(1, totalChunks);
+        float progress = Mathf.Clamp01(projectedSelectedChunks / (float)configuredChunks);
+        float plannedAverageDifficulty = GetPlannedAverageChunkDifficultyTarget();
+        float finalBudget = Mathf.Max(0.5f, targetDifficulty - plannedAverageDifficulty + structuralBudgetSlack);
+
+        // Early slack prevents the first interesting obstacle from being over-penalised before
+        // the planner has had a chance to balance it with later lower-pressure chunks.
+        float earlySlack = structuralBudgetSlack * (1f - progress);
+        return (finalBudget * progress) + earlySlack;
+    }
+
+    private float GetPlannedAverageChunkDifficultyTarget()
+    {
+        int plannedChunks = 0;
+        float sum = 0f;
+
+        if (startingChunkPrefab != null)
+        {
+            ChunkData startData = startingChunkPrefab.GetComponent<ChunkData>();
+            sum += startData != null ? startData.difficultyRating : startDifficultyBias;
+            plannedChunks++;
+        }
+
+        int generatedSlots = Mathf.Max(0, totalChunks - plannedChunks);
+        for (int i = 0; i < generatedSlots; i++)
+            sum += GetSlotTargetDifficultyForGeneratedSlotIndex(i);
+
+        plannedChunks += generatedSlots;
+        return plannedChunks > 0 ? sum / plannedChunks : targetDifficulty;
+    }
+
     private List<ChunkSelectionCandidate> GetCandidates(
         ChunkTag prev2,
         ChunkTag prev1,
@@ -1706,35 +1898,22 @@ public class LevelGenerator : MonoBehaviour
         int maxAttempts = desiredCount * 4;
         List<ChunkSelectionCandidate> generated = new List<ChunkSelectionCandidate>(desiredCount);
         HashSet<string> seenBlueprints = new HashSet<string>();
+        bool reserveHazardAccent = CanOfferGapHazardAccentCandidate(sourceData, request) && desiredCount > 1;
+        int normalDesiredCount = reserveHazardAccent ? desiredCount - 1 : desiredCount;
 
-        for (int attempt = 0; attempt < maxAttempts && generated.Count < desiredCount; attempt++)
+        for (int attempt = 0; attempt < maxAttempts && generated.Count < normalDesiredCount; attempt++)
         {
             ChunkBlueprint blueprint = SimpleChunkBlueprintGenerator.Generate(request);
-            if (blueprint == null)
-                continue;
+            TryAddGeneratedCandidate(generated, seenBlueprints, sourcePrefab, sourceData, request, blueprint);
+        }
 
-            string blueprintKey = GetStructuralBlueprintKey(blueprint);
-            if (!seenBlueprints.Add(blueprintKey))
-                continue;
-
-            ChunkBlueprintFeatures features = ChunkBlueprintFeatureExtractor.Analyze(blueprint);
-            ChunkBlueprintValidationResult validation = ChunkBlueprintValidator.Validate(blueprint);
-            if (!validation.isValid)
-                continue;
-
-            if (!IsGeneratedReplacementAcceptable(sourceData, request, blueprint, features, out string rejectionReason))
-                continue;
-
-            if (IsGeneratedCandidateSourceDuplicate(sourcePrefab, sourceData, blueprint))
-                continue;
-
-            generated.Add(new ChunkSelectionCandidate
-            {
-                sourcePrefab = sourcePrefab,
-                blueprint = blueprint,
-                blueprintFeatures = features,
-                validationReason = rejectionReason
-            });
+        if (reserveHazardAccent && generated.Count < desiredCount)
+        {
+            ChunkGenerationRequest hazardRequest = CreateGenerationRequest(sourcePrefab, sourceData);
+            hazardRequest.forceGapHazardAccent = true;
+            hazardRequest.gapHazardAccentOnExitSide = UnityEngine.Random.Range(0, 2) == 0;
+            ChunkBlueprint hazardBlueprint = SimpleChunkBlueprintGenerator.Generate(hazardRequest);
+            TryAddGeneratedCandidate(generated, seenBlueprints, sourcePrefab, sourceData, hazardRequest, hazardBlueprint);
         }
 
         if (generated.Count == 0)
@@ -1746,6 +1925,51 @@ public class LevelGenerator : MonoBehaviour
             generated[i].sourceFamilyWeight = perCandidateWeight;
             candidates.Add(generated[i]);
         }
+    }
+
+    private bool TryAddGeneratedCandidate(
+        List<ChunkSelectionCandidate> generated,
+        HashSet<string> seenBlueprints,
+        GameObject sourcePrefab,
+        ChunkData sourceData,
+        ChunkGenerationRequest request,
+        ChunkBlueprint blueprint)
+    {
+        if (generated == null || seenBlueprints == null || sourcePrefab == null || sourceData == null || blueprint == null)
+            return false;
+
+        string blueprintKey = GetStructuralBlueprintKey(blueprint);
+        if (!seenBlueprints.Add(blueprintKey))
+            return false;
+
+        ChunkBlueprintFeatures features = ChunkBlueprintFeatureExtractor.Analyze(blueprint);
+        ChunkBlueprintValidationResult validation = ChunkBlueprintValidator.Validate(blueprint);
+        if (!validation.isValid)
+            return false;
+
+        if (!IsGeneratedReplacementAcceptable(sourceData, request, blueprint, features, out string rejectionReason))
+            return false;
+
+        if (IsGeneratedCandidateSourceDuplicate(sourcePrefab, sourceData, blueprint))
+            return false;
+
+        generated.Add(new ChunkSelectionCandidate
+        {
+            sourcePrefab = sourcePrefab,
+            blueprint = blueprint,
+            blueprintFeatures = features,
+            validationReason = rejectionReason
+        });
+        return true;
+    }
+
+    private bool CanOfferGapHazardAccentCandidate(ChunkData sourceData, ChunkGenerationRequest request)
+    {
+        return sourceData != null &&
+               request != null &&
+               sourceData.primaryTag == ChunkTag.Gap &&
+               !sourceData.hasHazard &&
+               request.sourceMaxGapWidth > 0;
     }
 
     private bool IsGeneratedCandidateSourceDuplicate(GameObject sourcePrefab, ChunkData sourceData, ChunkBlueprint blueprint)
@@ -2047,8 +2271,17 @@ public class LevelGenerator : MonoBehaviour
         public ChunkTag prev1;
         public string previousPrefabName;
         public int samePrimaryTagStreak;
+        public StructuralBudgetState structuralBudgetState;
         public float cumulativeLogScore;
         public int selectedCount;
+    }
+
+    private struct StructuralBudgetState
+    {
+        public int selectedChunks;
+        public int hazardChunks;
+        public int estimatedJumps;
+        public int verticalChunks;
     }
 
     private struct LookaheadCandidateChoice
