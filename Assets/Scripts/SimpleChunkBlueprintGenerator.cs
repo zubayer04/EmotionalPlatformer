@@ -189,8 +189,8 @@ public static class SimpleChunkBlueprintGenerator
         int width = GetPreferredWidth(request, 7);
         if (request.hasSourceContext && Mathf.Abs(request.sourceExitDelta.x) > 0.1f)
         {
-            // Entry/exit markers sit just inside the support tiles, so a flat gap blueprint
-            // needs roughly source exitDelta + 2 cells to preserve traversal distance.
+            // entry/exit markers sit just inside support tiles, so a flat gap blueprint
+            // needs roughly source exit delta + 2 cells to preserve traversal distance
             int sourceEquivalentWidth = Mathf.CeilToInt(Mathf.Abs(request.sourceExitDelta.x)) + 2;
             width = Mathf.Max(width, sourceEquivalentWidth);
         }
@@ -198,7 +198,7 @@ public static class SimpleChunkBlueprintGenerator
         int gapSize = request.hasSourceContext && request.sourceMaxGapWidth > 0
             ? request.sourceMaxGapWidth
             : ChooseGapSize(request.targetDifficulty);
-        int supportBudget = width - 2 - gapSize; // minus E and X
+        int supportBudget = width - 2 - gapSize; // minus e and x
         const int preferredMinimumLanding = 2;
 
         if (supportBudget < preferredMinimumLanding * 2)
@@ -262,7 +262,7 @@ public static class SimpleChunkBlueprintGenerator
         if (request.forceGapHazardAccent)
             return true;
 
-        // Keep hazard-accented gaps as occasional variety rather than redefining the gap family.
+        // keep hazard-accented gaps as occasional variety rather than redefining the gap family
         return request.targetDifficulty >= 2 && Random.Range(0, 4) == 0;
     }
 
@@ -487,7 +487,7 @@ public static class SimpleChunkBlueprintGenerator
 
         if (variant == 0)
         {
-            // Stairs up
+            // stairs up
             return new ChunkBlueprint
             {
                 chunkName = "Generated_Vertical_StairsUp",
@@ -511,7 +511,7 @@ public static class SimpleChunkBlueprintGenerator
 
         if (variant == 1)
         {
-            // Offset rise
+            // offset rise
             return new ChunkBlueprint
             {
                 chunkName = "Generated_Vertical_OffsetRise",
@@ -533,7 +533,7 @@ public static class SimpleChunkBlueprintGenerator
             };
         }
 
-        // Step bridge
+        // step bridge
         return new ChunkBlueprint
         {
             chunkName = "Generated_Vertical_StepBridge",
@@ -574,7 +574,7 @@ public static class SimpleChunkBlueprintGenerator
         int minimumWidth = 1 + startSupport + gapSize + landingWidth + gapSize + endSupport + 1;
         int width = Mathf.Max(GetPreferredWidth(request, minimumWidth), minimumWidth);
 
-        // Any extra width goes into the side supports, not the landing.
+        // any extra width goes into the side supports, not the landing
         int extraWidth = width - minimumWidth;
         startSupport += extraWidth / 2;
         endSupport += extraWidth - (extraWidth / 2);

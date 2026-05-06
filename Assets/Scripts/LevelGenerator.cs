@@ -130,20 +130,17 @@ public class LevelGenerator : MonoBehaviour
     [Tooltip("Clamp the final score to this max (set 0 to disable clamping).")]
     public float clampMaxScore = 10f;
 
-    // Track what we spawned so we can delete it later
+    // spawned objects cleared before the next generated level
     private readonly List<GameObject> spawnedObjects = new List<GameObject>();
 
-    // Track chunk data for scoring (endpoint etc. won't be included)
+    // spawned chunk data used for scoring
     private readonly List<ChunkData> spawnedChunkData = new List<ChunkData>();
 
-    // Track exact prefab sequence for replay
-    private readonly List<ChunkSelectionCandidate> lastGeneratedSequence = new List<ChunkSelectionCandidate>();
     private readonly Dictionary<ChunkData, LevelRunLog.SlotRecord> activeSlotRecordsByChunk =
         new Dictionary<ChunkData, LevelRunLog.SlotRecord>();
 
     private LevelRunLog.RunRecord currentRunLog;
     private int currentRunSeed;
-    private int lastGeneratedRunSeed;
     private int generatedRunCounter;
 
     private class ChunkSelectionCandidate
@@ -271,15 +268,15 @@ public class LevelGenerator : MonoBehaviour
         }
     }
 
-    // Useful for other scripts (LevelManager etc.)
+    // exposed for level manager and runtime helpers
     public Vector3 FirstEntryWorld { get; private set; }
     public Vector3 LastExitWorld { get; private set; }
 
-    // Level bounds for KillZone sizing/placement
+    // level bounds for kill zone sizing and placement
     public Bounds LevelWorldBounds { get; private set; }
     public float LowestSolidY { get; private set; }
 
-    // Difficulty stats
+    // difficulty stats
     public float LevelDifficultyScore { get; private set; }
     public float AvgChunkDifficulty { get; private set; }
     public int HazardChunkCount { get; private set; }
@@ -288,28 +285,10 @@ public class LevelGenerator : MonoBehaviour
     public int ChunkCountThisLevel { get; private set; }
     public LevelRunLog.RunRecord CurrentRunLog => currentRunLog;
     public int CurrentRunSeed => currentRunSeed;
-    public int LastGeneratedRunSeed => lastGeneratedRunSeed;
 
     public void GenerateLevel()
     {
-        GenerateLevelWithSeed(CreateNextRunSeed(), null, rememberAsReplaySequence: true, isReplay: false, replaySourceSeed: 0);
-    }
-
-    public void ReplayLastGeneratedLevel()
-    {
-        if (generatedRunCounter == 0 && lastGeneratedSequence.Count == 0)
-        {
-            Debug.LogWarning("LevelGenerator: No stored level sequence to replay. Generating a fresh level instead.");
-            GenerateLevel();
-            return;
-        }
-
-        GenerateLevelWithSeed(
-            lastGeneratedRunSeed,
-            null,
-            rememberAsReplaySequence: false,
-            isReplay: true,
-            replaySourceSeed: lastGeneratedRunSeed);
+        GenerateLevelWithSeed(CreateNextRunSeed());
     }
 
     public void RecordDeathForChunk(ChunkData chunk, string source, float timeOfDeathSeconds)
@@ -397,12 +376,7 @@ public class LevelGenerator : MonoBehaviour
         return containingChunk != null ? containingChunk : closestChunk;
     }
 
-    private void GenerateLevelWithSeed(
-        int runSeed,
-        List<ChunkSelectionCandidate> sourceSequence,
-        bool rememberAsReplaySequence,
-        bool isReplay,
-        int replaySourceSeed)
+    private void GenerateLevelWithSeed(int runSeed)
     {
         UnityEngine.Random.State previousRandomState = UnityEngine.Random.state;
 
@@ -412,9 +386,7 @@ public class LevelGenerator : MonoBehaviour
             currentRunSeed = runSeed;
             UnityEngine.Random.InitState(runSeed);
 
-            List<ChunkSelectionCandidate> sequence = sourceSequence != null
-                ? new List<ChunkSelectionCandidate>(sourceSequence)
-                : BuildFreshSequence();
+            List<ChunkSelectionCandidate> sequence = BuildFreshSequence();
 
             if (sequence == null || sequence.Count == 0)
             {
@@ -422,11 +394,8 @@ public class LevelGenerator : MonoBehaviour
                 return;
             }
 
-            currentRunLog = CreateRunRecord(runSeed, isReplay, replaySourceSeed);
-            GenerateLevelFromSequence(sequence, rememberAsReplaySequence);
-
-            if (rememberAsReplaySequence)
-                lastGeneratedRunSeed = runSeed;
+            currentRunLog = CreateRunRecord(runSeed);
+            GenerateLevelFromSequence(sequence);
         }
         finally
         {
@@ -440,15 +409,13 @@ public class LevelGenerator : MonoBehaviour
         return unchecked((int)(DateTime.UtcNow.Ticks ^ (generatedRunCounter * 397L)));
     }
 
-    private LevelRunLog.RunRecord CreateRunRecord(int runSeed, bool isReplay, int replaySourceSeed)
+    private LevelRunLog.RunRecord CreateRunRecord(int runSeed)
     {
         return new LevelRunLog.RunRecord
         {
             runId = $"{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}_{Mathf.Abs(runSeed)}",
             generatedAtUtc = DateTime.UtcNow.ToString("o"),
             runSeed = runSeed,
-            isReplay = isReplay,
-            replaySourceSeed = replaySourceSeed,
             targetDifficultyBeforeRun = targetDifficulty,
             startDifficultyBias = startDifficultyBias,
             generationMode = generationMode.ToString(),
@@ -544,7 +511,7 @@ public class LevelGenerator : MonoBehaviour
         return sequence;
     }
 
-    private void GenerateLevelFromSequence(List<ChunkSelectionCandidate> sequence, bool rememberAsReplaySequence)
+    private void GenerateLevelFromSequence(List<ChunkSelectionCandidate> sequence)
     {
         if (clearBeforeGenerate) ClearLevel();
 
@@ -552,15 +519,6 @@ public class LevelGenerator : MonoBehaviour
         {
             Debug.LogWarning("LevelGenerator: Cannot generate level from empty sequence.");
             return;
-        }
-
-        if (rememberAsReplaySequence)
-        {
-            lastGeneratedSequence.Clear();
-            for (int i = 0; i < sequence.Count; i++)
-            {
-                lastGeneratedSequence.Add(sequence[i]);
-            }
         }
 
         Vector3 nextAttachPoint = (startPoint != null) ? startPoint.position : transform.position;
@@ -771,7 +729,7 @@ public class LevelGenerator : MonoBehaviour
         if (blueprintRuntimeBuilder == null) return false;
         if (cd == null) return false;
 
-        // Keep the very first chunk stable/safe
+        // keep the first chunk stable and safe
         if (slotIndex == 0) return false;
 
         if (UnityEngine.Random.value > generatedChunkReplacementChance) return false;
@@ -1873,8 +1831,7 @@ public class LevelGenerator : MonoBehaviour
         float plannedAverageDifficulty = GetPlannedAverageChunkDifficultyTarget();
         float finalBudget = Mathf.Max(0.5f, targetDifficulty - plannedAverageDifficulty + structuralBudgetSlack);
 
-        // Early slack prevents the first interesting obstacle from being over-penalised before
-        // the planner has had a chance to balance it with later lower-pressure chunks.
+        // early slack gives the planner room to balance later lower-pressure chunks
         float earlySlack = structuralBudgetSlack * (1f - progress);
         return (finalBudget * progress) + earlySlack;
     }

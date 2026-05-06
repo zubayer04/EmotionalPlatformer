@@ -134,7 +134,6 @@ def format_summary_line(run: dict[str, Any]) -> str:
     return (
         f"{run.get('runId', 'unknown')} | "
         f"seed={run.get('runSeed')} | "
-        f"replay={run.get('isReplay', False)} | "
         f"mode={run.get('generationMode', 'legacy')} | "
         f"target={fmt_num(target)} | "
         f"actual={fmt_num(actual)} | "
@@ -159,7 +158,6 @@ def print_latest_run_details(run: dict[str, Any]) -> None:
     print(f"Run ID: {run.get('runId', '-')}")
     print(f"Generated At: {run.get('generatedAtUtc', '-')}")
     print(f"Seed: {run.get('runSeed', '-')}")
-    print(f"Replay: {run.get('isReplay', False)}")
     print(f"Generation Mode: {run.get('generationMode', 'legacy')}")
     print(
         f"Target: {fmt_num(run.get('targetDifficultyBeforeRun'))} | "

@@ -105,26 +105,25 @@ public class LevelManager : MonoBehaviour
     [Header("Testing / Pause After Level")]
     [SerializeField] private bool pauseAfterLevelCompletion = true;
     [SerializeField] private KeyCode continueKey = KeyCode.Return;
-    [SerializeField] private KeyCode replayKey = KeyCode.R;
 
     [Header("Debug HUD")]
     [SerializeField] private bool showHud = true;
     [SerializeField] private bool advancedHud = true;
 
-    // Debug info for the most recently completed level
+    // latest completed-level debug values
     private float lastDeathsPerChunk = 0f;
     private float lastTimePerChunk = 0f;
     private float lastTargetBeforeAdapt = 0f;
     private float lastTargetAfterAdapt = 0f;
     private string lastAdaptationDecision = "None yet";
 
-    // Pause / pending-next-level state
+    // pause and pending-next-level state
     private bool waitingForNextLevelChoice = false;
 
-    // Has the currently-generated level already had its first completion logged/adapted?
+    // prevents duplicate completion logging for the current generated level
     private bool currentGeneratedLevelAlreadyLogged = false;
 
-    // Stored completion snapshot so logging stays visible while paused
+    // stored completion snapshot for the paused summary screen
     private float completedTime = 0f;
     private int completedDeaths = 0;
     private int completedChunkCount = 0;
@@ -134,11 +133,11 @@ public class LevelManager : MonoBehaviour
     private int completedJumps = 0;
     private int completedVertical = 0;
 
-    // Per-level logging
+    // per-level logging
     private readonly Dictionary<ChunkData, ChunkDeathStat> deathsByChunk = new Dictionary<ChunkData, ChunkDeathStat>();
     private readonly List<DeathEventInfo> deathEvents = new List<DeathEventInfo>();
 
-    // Adaptive memory
+    // adaptive memory
     private int cleanRunStreak = 0;
     private bool hasRecentStrainScore = false;
     private float recentStrainScore = 0f;
@@ -198,10 +197,6 @@ public class LevelManager : MonoBehaviour
             if (Input.GetKeyDown(continueKey))
             {
                 ContinueToNextLevel();
-            }
-            else if (Input.GetKeyDown(replayKey))
-            {
-                ReplayCurrentLevel();
             }
         }
     }
@@ -274,7 +269,7 @@ public class LevelManager : MonoBehaviour
         float deathsPerChunk = deathsThisLevel / (float)chunkCount;
         float timePerChunk = levelTimer / chunkCount;
 
-        // Snapshot completed-level values for display/logging while paused
+        // snapshot completed-level values for display and logging while paused
         completedTime = levelTimer;
         completedDeaths = deathsThisLevel;
         completedChunkCount = levelGenerator.ChunkCountThisLevel;
@@ -406,23 +401,6 @@ public class LevelManager : MonoBehaviour
         GenerateFreshLevel();
     }
 
-    private void ReplayCurrentLevel()
-    {
-        Time.timeScale = 1f;
-        waitingForNextLevelChoice = false;
-
-        levelGenerator.ClearLevel();
-        levelGenerator.ReplayLastGeneratedLevel();
-
-        RepositionKillZoneToLevel();
-
-        ResetStats();
-        RespawnPlayer(resetVelocity: true);
-
-        if (behaviourTracker != null)
-            behaviourTracker.StartTracking();
-    }
-
     private void EnsureBehaviourTracker()
     {
         if (behaviourTracker == null)
@@ -472,8 +450,8 @@ public class LevelManager : MonoBehaviour
 
         float engagementScore = behaviour.EngagementScore();
 
-        // Quality score: centered around 0.5 engagement = neutral
-        // High engagement -> positive (reinforce transition), low -> negative (weaken)
+        // quality score: centered around 0.5 engagement = neutral
+        // high engagement reinforces a transition; low engagement weakens it
         float qualityBase = (engagementScore - 0.5f) * 2f;
 
         float deliveredTargetDelta = completedActualDifficulty - lastTargetBeforeAdapt;
@@ -483,12 +461,11 @@ public class LevelManager : MonoBehaviour
 
         if (deliveredContentOvershotTarget && qualityBase > 0f)
         {
-            // A clean, fluent run should not reinforce transitions if the generated
-            // content itself was already above the intended target difficulty.
+            // clean, fluent play should not reinforce transitions that already overshot target
             qualityBase = 0f;
         }
 
-        // Modulate by death clustering — spread deaths (overwhelm) penalize more
+        // spread deaths suggest broader overwhelm, so they penalize more
         if (behaviour.deathClusteringRatio < 0.5f && behaviour.deathClusteringRatio > 0f)
             qualityBase -= 0.3f;
 
@@ -510,7 +487,7 @@ public class LevelManager : MonoBehaviour
 
             if (i >= 1)
             {
-                // Per-slot quality adjustment: penalize slots that had deaths
+                // per-slot adjustment: penalize slots that had deaths
                 float slotQuality = qualityBase;
                 if (slot.deathsAttributedToSlot > 0)
                     slotQuality -= 0.2f * Mathf.Min(slot.deathsAttributedToSlot, 3);
@@ -905,8 +882,7 @@ public class LevelManager : MonoBehaviour
         if (waitingForNextLevelChoice)
         {
             text += $"\n\nPAUSED AFTER LEVEL COMPLETE" +
-                    $"\nPress {continueKey} for Next Level" +
-                    $"\nPress {replayKey} to Replay Same Level";
+                    $"\nPress {continueKey} for Next Level";
         }
 
         GUI.Box(r, text);
@@ -926,7 +902,7 @@ public class LevelManager : MonoBehaviour
         if (waitingForNextLevelChoice)
         {
             text += $"\n\nLevel Complete" +
-                    $"\nEnter: Next   R: Replay";
+                    $"\nEnter: Next";
         }
 
         GUI.Box(r, text);

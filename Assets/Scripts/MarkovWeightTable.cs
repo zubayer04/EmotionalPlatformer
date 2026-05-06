@@ -45,13 +45,13 @@ public class MarkovWeightTable
         }
     }
 
-    // Learned weights
+    // learned weights
     private Dictionary<WeightKey, float> learnedWeights = new Dictionary<WeightKey, float>();
 
-    // Baseline (hand-tuned) weights — never modified at runtime
+    // baseline hand-tuned weights; runtime learning never modifies this copy
     private Dictionary<WeightKey, float> baselineWeights = new Dictionary<WeightKey, float>();
 
-    // Serialization format for JSON persistence
+    // json persistence format
     [Serializable]
     private class SerializedEntry
     {
@@ -133,7 +133,7 @@ public class MarkovWeightTable
 
     public int LearnedEntryCount => learnedWeights.Count;
 
-    // --- Persistence ---
+    // persistence
 
     public static string GetSaveDirectoryPath()
     {
@@ -203,7 +203,7 @@ public class MarkovWeightTable
             }
 
             learnedWeights.Clear();
-            // Start from baseline so any keys not in the save file retain baseline values
+            // start from baseline so saved files can omit unchanged keys
             foreach (var kvp in baselineWeights)
                 learnedWeights[kvp.Key] = kvp.Value;
 
@@ -229,43 +229,43 @@ public class MarkovWeightTable
         }
     }
 
-    // --- Baseline weight initialization (extracted from LevelGenerator.GetTransitionWeight) ---
+    // baseline weight initialization
 
     private void InitializeBaselineWeights()
     {
         baselineWeights = new Dictionary<WeightKey, float>();
 
-        // === LOW BAND ===
+        // low band
 
-        // Spikes ->
+        // spikes ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Rest, DifficultyBand.Low, 4.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Safe, DifficultyBand.Low, 3.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Gap, DifficultyBand.Low, 1.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Vertical, DifficultyBand.Low, 0.1f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Precision, DifficultyBand.Low, 0.1f);
 
-        // Precision ->
+        // precision ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Rest, DifficultyBand.Low, 4.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Safe, DifficultyBand.Low, 3.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Gap, DifficultyBand.Low, 1.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Vertical, DifficultyBand.Low, 0.1f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Spikes, DifficultyBand.Low, 0.1f);
 
-        // Vertical ->
+        // vertical ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Safe, DifficultyBand.Low, 3.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Rest, DifficultyBand.Low, 2.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Gap, DifficultyBand.Low, 1.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Precision, DifficultyBand.Low, 0.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Spikes, DifficultyBand.Low, 0.5f);
 
-        // Gap ->
+        // gap ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Safe, DifficultyBand.Low, 3.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Rest, DifficultyBand.Low, 2.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Precision, DifficultyBand.Low, 0.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Vertical, DifficultyBand.Low, 0.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Spikes, DifficultyBand.Low, 0.5f);
 
-        // Rest/Safe ->
+        // rest/safe ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Safe, DifficultyBand.Low, 2.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Gap, DifficultyBand.Low, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Vertical, DifficultyBand.Low, 1.5f);
@@ -279,37 +279,37 @@ public class MarkovWeightTable
         SetBaseline(ChunkTag.Rest, ChunkTag.Safe, ChunkTag.Spikes, DifficultyBand.Low, 0.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Safe, ChunkTag.Precision, DifficultyBand.Low, 0.5f);
 
-        // === MEDIUM BAND ===
+        // medium band
 
-        // Spikes ->
+        // spikes ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Safe, DifficultyBand.Medium, 3.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Rest, DifficultyBand.Medium, 2.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Gap, DifficultyBand.Medium, 1.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Vertical, DifficultyBand.Medium, 1.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Precision, DifficultyBand.Medium, 0.25f);
 
-        // Precision ->
+        // precision ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Safe, DifficultyBand.Medium, 2.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Rest, DifficultyBand.Medium, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Gap, DifficultyBand.Medium, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Vertical, DifficultyBand.Medium, 1.25f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Spikes, DifficultyBand.Medium, 1.0f);
 
-        // Vertical ->
+        // vertical ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Safe, DifficultyBand.Medium, 2.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Rest, DifficultyBand.Medium, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Gap, DifficultyBand.Medium, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Precision, DifficultyBand.Medium, 1.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Spikes, DifficultyBand.Medium, 0.75f);
 
-        // Gap ->
+        // gap ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Safe, DifficultyBand.Medium, 2.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Rest, DifficultyBand.Medium, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Precision, DifficultyBand.Medium, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Vertical, DifficultyBand.Medium, 1.25f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Spikes, DifficultyBand.Medium, 0.75f);
 
-        // Rest/Safe ->
+        // rest/safe ->
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Gap, DifficultyBand.Medium, 2.2f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Safe, DifficultyBand.Medium, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Vertical, DifficultyBand.Medium, 1.75f);
@@ -323,49 +323,49 @@ public class MarkovWeightTable
         SetBaseline(ChunkTag.Rest, ChunkTag.Safe, ChunkTag.Precision, DifficultyBand.Medium, 1.2f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Safe, ChunkTag.Rest, DifficultyBand.Medium, 1.0f);
 
-        // === HIGH BAND ===
+        // high band
 
-        // 2-step overrides: Spikes -> Rest -> X
+        // 2-step overrides: spikes -> rest -> x
         SetBaseline(ChunkTag.Spikes, ChunkTag.Rest, ChunkTag.Spikes, DifficultyBand.High, 2.0f);
         SetBaseline(ChunkTag.Spikes, ChunkTag.Rest, ChunkTag.Precision, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Spikes, ChunkTag.Rest, ChunkTag.Gap, DifficultyBand.High, 1.5f);
         SetBaseline(ChunkTag.Spikes, ChunkTag.Rest, ChunkTag.Safe, DifficultyBand.High, 1.0f);
         SetBaseline(ChunkTag.Spikes, ChunkTag.Rest, ChunkTag.Rest, DifficultyBand.High, 0.75f);
 
-        // 2-step overrides: Vertical -> Gap -> X
+        // 2-step overrides: vertical -> gap -> x
         SetBaseline(ChunkTag.Vertical, ChunkTag.Gap, ChunkTag.Precision, DifficultyBand.High, 2.0f);
         SetBaseline(ChunkTag.Vertical, ChunkTag.Gap, ChunkTag.Spikes, DifficultyBand.High, 1.5f);
         SetBaseline(ChunkTag.Vertical, ChunkTag.Gap, ChunkTag.Safe, DifficultyBand.High, 1.0f);
 
-        // Spikes -> (High, general prev2)
+        // spikes -> high band, general prev2
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Safe, DifficultyBand.High, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Gap, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Rest, DifficultyBand.High, 1.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Precision, DifficultyBand.High, 1.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Spikes, ChunkTag.Vertical, DifficultyBand.High, 1.0f);
 
-        // Precision -> (High)
+        // precision -> high band
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Safe, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Gap, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Vertical, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Rest, DifficultyBand.High, 1.25f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Precision, ChunkTag.Spikes, DifficultyBand.High, 1.25f);
 
-        // Vertical -> (High)
+        // vertical -> high band
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Gap, DifficultyBand.High, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Precision, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Safe, DifficultyBand.High, 1.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Spikes, DifficultyBand.High, 1.25f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Vertical, ChunkTag.Rest, DifficultyBand.High, 1.0f);
 
-        // Gap -> (High)
+        // gap -> high band
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Precision, DifficultyBand.High, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Vertical, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Safe, DifficultyBand.High, 1.5f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Spikes, DifficultyBand.High, 1.25f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Gap, ChunkTag.Rest, DifficultyBand.High, 1.0f);
 
-        // Rest/Safe -> (High)
+        // rest/safe -> high band
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Gap, DifficultyBand.High, 2.0f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Vertical, DifficultyBand.High, 1.75f);
         SetBaseline(ChunkTag.Rest, ChunkTag.Rest, ChunkTag.Spikes, DifficultyBand.High, 1.75f);
@@ -398,7 +398,7 @@ public class MarkovWeightTable
         return DefaultWeight;
     }
 
-    // --- Utility ---
+    // utility
 
     public static DifficultyBand GetBandForDifficulty(float difficulty)
     {

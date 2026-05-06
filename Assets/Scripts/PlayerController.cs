@@ -4,9 +4,7 @@ using UnityEngine;
 [RequireComponent(typeof(Collider2D))]
 public class PlayerController : MonoBehaviour
 {
-    // -------------------------
-    // CONFIGURATION
-    // -------------------------
+    // movement tuning
 
     [Header("Horizontal Movement")]
     [SerializeField] private float maxSpeed = 8f;
@@ -43,42 +41,38 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float wallJumpVerticalSpeed = 14f;
     [SerializeField] private float wallJumpControlLockTime = 0.12f;
 
-    // -------------------------
-    // RUNTIME VARIABLES
-    // -------------------------
-
     private Rigidbody2D rb;
     private Collider2D col;
     private Animator anim;
-    private SpriteRenderer sr;   // NEW
+    private SpriteRenderer sr;
 
-    // Input
+    // input
     private float xInput;
     private float yInput;
     private bool jumpHeldRuntime = false;
     private bool dashPressed = false;
 
-    // Movement state
+    // movement state
     private float facing = 1f;
     private bool isGrounded;
     private bool wasGrounded = false;
     private float coyoteTimeCounter = 0f;
     private float jumpBufferCounter = 0f;
 
-    // Dash state
+    // dash state
     private bool isDashing = false;
     private bool hasDashed = false;
     private float dashStartTime = 0f;
     private Vector2 dashDir = Vector2.zero;
 
-    // Wall state
+    // wall state
     private bool isOnLeftWall;
     private bool isOnRightWall;
     private bool isOnWall;
     private bool isWallSliding;
     private float wallDirX;
 
-    // Wall jump control lock
+    // wall jump control lock
     private float wallJumpLockCounter = 0f;
 
     private void Awake()
@@ -86,7 +80,7 @@ public class PlayerController : MonoBehaviour
         rb = GetComponent<Rigidbody2D>();
         col = GetComponent<Collider2D>();
         anim = GetComponent<Animator>();
-        sr = GetComponent<SpriteRenderer>();   // NEW
+        sr = GetComponent<SpriteRenderer>();
 
         rb.gravityScale = baseGravityScale;
         rb.freezeRotation = true;
@@ -99,8 +93,8 @@ public class PlayerController : MonoBehaviour
         if (Mathf.Abs(xInput) < inputDeadzone) xInput = 0f;
         if (xInput != 0) facing = Mathf.Sign(xInput);
 
-        // Flip sprite based on facing
-        UpdateSpriteFacing();   // NEW
+        // keep sprite direction synced with input
+        UpdateSpriteFacing();
 
         yInput = Input.GetAxisRaw("Vertical");
 
@@ -141,7 +135,7 @@ public class PlayerController : MonoBehaviour
         float accelRate = (Mathf.Abs(effectiveXInput) > 0.01f) ? acceleration : deceleration;
         float newX = Mathf.MoveTowards(v.x, targetSpeed, accelRate * Time.fixedDeltaTime);
 
-        // DASH START
+        // dash start
         if (dashPressed && !isDashing && !hasDashed)
         {
             dashPressed = false;
@@ -161,7 +155,7 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        // DASH ACTIVE
+        // dash active
         if (isDashing)
         {
             rb.linearVelocity = dashDir * dashSpeed;
@@ -181,7 +175,7 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        // WALL / GROUND JUMP
+        // wall and ground jump
         bool wantsJump = jumpBufferCounter > 0f;
 
         if (wantsJump)
@@ -210,14 +204,14 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        // WALL SLIDE
+        // wall slide
         if (isWallSliding)
         {
             if (v.y < -wallSlideSpeed)
                 v.y = -wallSlideSpeed;
         }
 
-        // VARIABLE GRAVITY
+        // variable gravity
         if (v.y < 0f)
         {
             v.y += Physics2D.gravity.y * (fallMultiplier - 1f) * baseGravityScale * Time.fixedDeltaTime;
@@ -230,7 +224,7 @@ public class PlayerController : MonoBehaviour
         if (v.y < -maxFallSpeed)
             v.y = -maxFallSpeed;
 
-        // Apply velocity
+        // apply velocity
         rb.linearVelocity = new Vector2(newX, v.y);
 
         wasGrounded = isGrounded;
@@ -239,9 +233,7 @@ public class PlayerController : MonoBehaviour
         UpdateAnimator();
     }
 
-    // -------------------------
-    // ANIMATOR UPDATE
-    // -------------------------
+    // animator update
     private void UpdateAnimator()
     {
         if (anim == null) return;
@@ -255,20 +247,16 @@ public class PlayerController : MonoBehaviour
         anim.SetBool("IsDashing", isDashing);
     }
 
-    // -------------------------
-    // SPRITE FACING (NEW)
-    // -------------------------
+    // sprite facing
     private void UpdateSpriteFacing()
     {
         if (sr == null) return;
 
-        // facing > 0 → look right, facing < 0 → look left
+        // facing > 0 looks right, facing < 0 looks left
         sr.flipX = facing < 0f;
     }
 
-    // -------------------------
-    // GROUND CHECK
-    // -------------------------
+    // ground check
     private bool CheckGrounded()
     {
         Bounds b = col.bounds;
@@ -279,9 +267,7 @@ public class PlayerController : MonoBehaviour
         return hit.collider != null;
     }
 
-    // -------------------------
-    // WALL DETECTION
-    // -------------------------
+    // wall detection
     private void DetectWalls()
     {
         Bounds b = col.bounds;
@@ -301,9 +287,7 @@ public class PlayerController : MonoBehaviour
         else wallDirX = 0f;
     }
 
-    // -------------------------
-    // WALL SLIDE
-    // -------------------------
+    // wall slide
     private void UpdateWallSlideState()
     {
         bool pressingIntoWall =

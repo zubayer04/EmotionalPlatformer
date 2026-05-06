@@ -214,10 +214,26 @@ public class GeneratedChunkBuildTester : MonoBehaviour
             Mathf.Max(
                 GetGeneratedSafeVerticalExitDeltaTolerance(sampleRequest, generated),
                 GetGeneratedPrecisionVerticalExitDeltaTolerance(sampleRequest, generated)));
+
+        if (controlledHazardAccent &&
+            IsControlledHazardAccentExitDelta(exitDeltaDiff, verticalExitDeltaTolerance))
+        {
+            return "controlled_hazard_accent";
+        }
+
         if (Mathf.Abs(exitDeltaDiff.x) > 1.25f || Mathf.Abs(exitDeltaDiff.y) > verticalExitDeltaTolerance)
             return $"exit_delta_mismatch:({exitDeltaDiff.x:+0.##;-0.##;0},{exitDeltaDiff.y:+0.##;-0.##;0})";
 
-        return "equivalent";
+        return controlledHazardAccent ? "controlled_hazard_accent" : "equivalent";
+    }
+
+    private bool IsControlledHazardAccentExitDelta(Vector2 exitDeltaDiff, float verticalExitDeltaTolerance)
+    {
+        const float allowedHorizontalSupportExtension = 2.25f;
+
+        return exitDeltaDiff.x >= -0.25f &&
+               exitDeltaDiff.x <= allowedHorizontalSupportExtension &&
+               Mathf.Abs(exitDeltaDiff.y) <= verticalExitDeltaTolerance;
     }
 
     private bool IsGeneratedGapHazardAccent(ChunkGenerationRequest sampleRequest, ChunkBlueprint generated)
@@ -317,6 +333,12 @@ public class GeneratedChunkBuildTester : MonoBehaviour
             equivalence;
         textMesh.characterSize = 0.25f;
         textMesh.anchor = TextAnchor.LowerLeft;
-        textMesh.color = equivalence == "equivalent" ? Color.green : Color.yellow;
+        textMesh.color = IsPositiveEquivalenceSummary(equivalence) ? Color.green : Color.yellow;
+    }
+
+    private bool IsPositiveEquivalenceSummary(string equivalence)
+    {
+        return equivalence == "equivalent" ||
+               equivalence == "controlled_hazard_accent";
     }
 }

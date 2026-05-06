@@ -5,7 +5,7 @@ using UnityEngine;
 
 public static class LevelRunLog
 {
-    public const int SchemaVersion = 13;
+    public const int SchemaVersion = 14;
 
     [Serializable]
     public class RunRecord
@@ -14,8 +14,6 @@ public static class LevelRunLog
         public string runId;
         public string generatedAtUtc;
         public int runSeed;
-        public bool isReplay;
-        public int replaySourceSeed;
 
         public float targetDifficultyBeforeRun;
         public float startDifficultyBias;
@@ -169,7 +167,7 @@ public static class LevelRunLog
         public float actualDifficultyUndershootTolerance;
         public float strainSmoothing;
 
-        // Behavioural signals
+        // behavioural signals
         public float hesitationScore;
         public float momentumFluidity;
         public float directionReversalRate;
@@ -179,7 +177,7 @@ public static class LevelRunLog
         public int behaviourChunksTraversed;
         public int behaviourTraversalFrames;
 
-        // Markov learning audit
+        // markov learning audit
         public bool markovLearningApplied;
         public bool markovPositiveReinforcementCapped;
         public float markovLearningQuality;

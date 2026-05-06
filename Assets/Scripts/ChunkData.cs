@@ -45,7 +45,7 @@ public class ChunkData : MonoBehaviour
 
     private void Start()
     {
-        // Delay one frame so Tilemaps finish internal initialization
+        // delay one frame so tilemaps finish internal initialization
         StartCoroutine(DelayedRecalc());
     }
 

@@ -15,25 +15,25 @@ public class PlayerBehaviourTracker : MonoBehaviour
 
     private Rigidbody2D playerRb;
 
-    // Per-chunk accumulators
+    // per-chunk accumulators
     private int chunkHesitationFrames;
     private int chunkTraversalFrames;
     private float chunkMomentumSum;
     private int chunkDirectionReversals;
     private float lastNonZeroVelocitySign;
 
-    // Per-level accumulators
+    // per-level accumulators
     private int totalHesitationFrames;
     private int totalTraversalFrames;
     private float totalMomentumSum;
     private int totalDirectionReversals;
     private int chunksTraversed;
 
-    // Death tracking
+    // death tracking
     private readonly Dictionary<string, int> deathsPerChunkName = new Dictionary<string, int>();
     private int totalDeathsTracked;
 
-    // Retry delay tracking
+    // retry delay tracking
     private bool waitingForRetryInput;
     private float respawnTimestamp;
     private float totalRetryDelay;
@@ -125,29 +125,29 @@ public class PlayerBehaviourTracker : MonoBehaviour
         summary.totalDirectionReversals = totalDirectionReversals;
         summary.chunksTraversed = chunksTraversed;
 
-        // Hesitation: fraction of grounded traversal time spent near-stationary
+        // hesitation: fraction of grounded traversal time spent near-stationary
         summary.hesitationScore = totalTraversalFrames > 0
             ? (float)totalHesitationFrames / totalTraversalFrames
             : 0f;
 
-        // Momentum fluidity: average normalized horizontal speed
+        // momentum fluidity: average normalized horizontal speed
         float maxSpeed = playerController != null ? playerController.MaxSpeed : 8f;
         summary.momentumFluidity = totalTraversalFrames > 0 && maxSpeed > 0f
             ? Mathf.Clamp01(totalMomentumSum / (totalTraversalFrames * maxSpeed))
             : 1f;
 
-        // Direction reversal rate: reversals per second of traversal time
+        // direction reversal rate: reversals per second of traversal time
         float traversalSeconds = totalTraversalFrames * Time.fixedDeltaTime;
         summary.directionReversalRate = traversalSeconds > 0.1f
             ? totalDirectionReversals / traversalSeconds
             : 0f;
 
-        // Retry delay: average time from respawn to meaningful input
+        // retry delay: average time from respawn to meaningful input
         summary.avgRetryDelay = retryDelayCount > 0
             ? totalRetryDelay / retryDelayCount
             : -1f;
 
-        // Death clustering: fraction of deaths on the deadliest chunk
+        // death clustering: fraction of deaths on the deadliest chunk
         if (totalDeathsTracked > 0 && deathsPerChunkName.Count > 0)
         {
             int maxDeaths = 0;
@@ -176,14 +176,14 @@ public class PlayerBehaviourTracker : MonoBehaviour
 
         chunkTraversalFrames++;
 
-        // Hesitation: grounded and near-stationary
+        // hesitation: grounded and near-stationary
         if (grounded && absVx < hesitationSpeedThreshold)
             chunkHesitationFrames++;
 
-        // Momentum accumulator
+        // momentum accumulator
         chunkMomentumSum += absVx;
 
-        // Direction reversals
+        // direction reversals
         if (absVx > 0.1f)
         {
             float currentSign = Mathf.Sign(vx);
@@ -192,7 +192,7 @@ public class PlayerBehaviourTracker : MonoBehaviour
             lastNonZeroVelocitySign = currentSign;
         }
 
-        // Retry delay detection
+        // retry delay detection
         if (waitingForRetryInput && absVx >= meaningfulInputSpeed)
         {
             float delay = Time.time - respawnTimestamp;

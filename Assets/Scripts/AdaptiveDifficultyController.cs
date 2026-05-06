@@ -238,7 +238,7 @@ public static class AdaptiveDifficultyController
         float slowTimePerChunkThreshold,
         BehaviourSummary behaviour)
     {
-        // Classic strain signals (death and time pressure)
+        // classic strain signals: death and time pressure
         float deathPressure = hardDeathsPerChunkThreshold > 0f
             ? deathsPerChunk / hardDeathsPerChunkThreshold
             : (deathsPerChunk > 0f ? 1f : 0f);
@@ -252,27 +252,27 @@ public static class AdaptiveDifficultyController
         if (!HasBehaviourData(behaviour))
             return Mathf.Clamp01(classicStrain);
 
-        // Behavioural strain signals
-        // Hesitation: high hesitation = player is anxious about upcoming challenges
+        // behavioural strain signals
+        // hesitation can indicate caution before upcoming challenges
         float hesitationStrain = Mathf.Clamp01(behaviour.hesitationScore * 1.5f);
 
-        // Low momentum fluidity = player is struggling to move confidently
+        // low momentum fluidity suggests less confident movement
         float momentumStrain = Mathf.Clamp01(1f - behaviour.momentumFluidity);
 
-        // High direction reversals = indecision under pressure
+        // high direction reversals suggest indecision under pressure
         float reversalStrain = Mathf.Clamp01(behaviour.directionReversalRate / 4f);
 
-        // Slow retry = fatigue/frustration after death
+        // slow retry can suggest fatigue or frustration after death
         float retryStrain = 0f;
         if (behaviour.avgRetryDelay >= 0f)
             retryStrain = Mathf.Clamp01(behaviour.avgRetryDelay / 3f);
 
-        // Spread deaths (low clustering) = overwhelm rather than focused challenge
+        // spread deaths suggest overwhelm rather than one focused challenge
         float overwhelmStrain = 0f;
         if (behaviour.deathClusteringRatio > 0f && behaviour.deathClusteringRatio < 0.5f)
             overwhelmStrain = Mathf.Clamp01((0.5f - behaviour.deathClusteringRatio) * 2f);
 
-        // Weighted combination: classic signals still dominate (60%), behavioural adds nuance (40%)
+        // classic signals dominate, while behavioural proxies add nuance
         float behaviouralStrain = (hesitationStrain * 0.3f) +
                                   (momentumStrain * 0.25f) +
                                   (reversalStrain * 0.15f) +

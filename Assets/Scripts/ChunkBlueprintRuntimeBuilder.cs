@@ -17,6 +17,9 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
     [SerializeField] private Sprite spikeSprite;
     [SerializeField] private Sprite[] decorationSprites;
 
+    [Header("Render Settings")]
+    [SerializeField] private int decorationSortingOrder = -1;
+
     [Header("Debug Input")]
     [SerializeField] private ChunkBlueprint blueprintToBuild;
 
@@ -159,17 +162,17 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
         Vector2Int e = blueprint.entryCell;
         Vector3 localPos;
 
-        // Prefer first support immediately to the right of E
+        // prefer first support immediately to the right of e
         if (IsSupportCell(GetCellSafe(blueprint, e.x + 1, e.y)))
         {
             localPos = GetTopLeftOfCell(e.x + 1, e.y, blueprint.height);
         }
-        // Fallback: support directly below E
+        // fallback: support directly below e
         else if (IsSupportCell(GetCellSafe(blueprint, e.x, e.y + 1)))
         {
             localPos = GetTopLeftOfCell(e.x, e.y + 1, blueprint.height);
         }
-        // Fallback: support to the left
+        // fallback: support to the left
         else if (IsSupportCell(GetCellSafe(blueprint, e.x - 1, e.y)))
         {
             localPos = GetTopLeftOfCell(e.x - 1, e.y, blueprint.height);
@@ -190,17 +193,17 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
         Vector2Int xCell = blueprint.exitCell;
         Vector3 localPos;
 
-        // Prefer last support immediately to the left of X
+        // prefer last support immediately to the left of x
         if (IsSupportCell(GetCellSafe(blueprint, xCell.x - 1, xCell.y)))
         {
             localPos = GetTopRightOfCell(xCell.x - 1, xCell.y, blueprint.height);
         }
-        // Fallback: support directly below X
+        // fallback: support directly below x
         else if (IsSupportCell(GetCellSafe(blueprint, xCell.x, xCell.y + 1)))
         {
             localPos = GetTopRightOfCell(xCell.x, xCell.y + 1, blueprint.height);
         }
-        // Fallback: support to the right
+        // fallback: support to the right
         else if (IsSupportCell(GetCellSafe(blueprint, xCell.x + 1, xCell.y)))
         {
             localPos = GetTopRightOfCell(xCell.x + 1, xCell.y, blueprint.height);
@@ -296,6 +299,7 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
         SpriteRenderer sr = go.AddComponent<SpriteRenderer>();
         sr.sprite = sprite;
         sr.color = Color.white;
+        sr.sortingOrder = decorationSortingOrder;
 
         return go;
     }
