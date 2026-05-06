@@ -28,6 +28,9 @@ Using this version is recommended when opening the project for marking.
 - Dash: `Left Shift`
 - Continue after completing a level: `Enter` / `Return`
 
+## Tips
+- You can wall slide and wall jump (for both you have to hold direction key towards target wall)
+
 ## Menu Options
 
 The start menu provides:
