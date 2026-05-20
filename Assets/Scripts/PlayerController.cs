@@ -89,6 +89,7 @@ public class PlayerController : MonoBehaviour
 
     private void Update()
     {
+        // reads player input here so fixedupdate can apply it through physics.
         xInput = Input.GetAxisRaw("Horizontal");
         if (Mathf.Abs(xInput) < inputDeadzone) xInput = 0f;
         if (xInput != 0) facing = Mathf.Sign(xInput);
@@ -111,6 +112,7 @@ public class PlayerController : MonoBehaviour
 
     private void FixedUpdate()
     {
+        // applies the traversal mechanics that generated chunks are built around.
         if (wallJumpLockCounter > 0f)
             wallJumpLockCounter -= Time.fixedDeltaTime;
 
@@ -259,6 +261,7 @@ public class PlayerController : MonoBehaviour
     // ground check
     private bool CheckGrounded()
     {
+        // boxcast makes grounded checks stable across handcrafted and generated chunks.
         Bounds b = col.bounds;
         Vector2 boxSize = new Vector2(b.size.x * 0.98f, groundCheckPadding);
         Vector2 boxOrigin = new Vector2(b.center.x, b.min.y + (groundCheckPadding * 0.5f));
@@ -270,6 +273,7 @@ public class PlayerController : MonoBehaviour
     // wall detection
     private void DetectWalls()
     {
+        // wall rays support wall sliding and wall jumping on solid level geometry.
         Bounds b = col.bounds;
         Vector2 center = b.center;
         float rayLength = b.extents.x + wallCheckDistance;

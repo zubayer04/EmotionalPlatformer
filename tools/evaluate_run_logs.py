@@ -197,6 +197,7 @@ def fmt(value: Any, digits: int = 2) -> str:
 
 
 def summarize_dataset(label: str, path: Path, runs: list[dict[str, Any]]) -> dict[str, Any]:
+    # converts raw run logs into dissertation comparison metrics.
     deltas = [value for value in (run_delta(run) for run in runs) if value is not None]
     all_slot_deltas = [delta for run in runs for delta in slot_deltas(run)]
 
@@ -424,6 +425,7 @@ def name_for_key(key: tuple[int, int, int, int]) -> str:
 
 
 def markov_drift_report(weights_path: Path, source_path: Path) -> tuple[list[str], list[dict[str, Any]]]:
+    # compares learned transition weights against the coded baseline table.
     baseline = parse_markov_baseline(source_path)
     learned = load_markov_weights(weights_path)
     rows: list[dict[str, Any]] = []

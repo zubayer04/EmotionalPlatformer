@@ -4,6 +4,7 @@ using UnityEngine;
 [Serializable]
 public struct BehaviourSummary
 {
+    // compact behaviour evidence passed from tracking into adaptation and logs.
     [Tooltip("Fraction of grounded chunk time spent near-stationary (|vx| < threshold). Higher = more anxious.")]
     public float hesitationScore;
 
@@ -31,6 +32,7 @@ public struct BehaviourSummary
     [Tooltip("Total traversal frames observed across all chunks.")]
     public int totalTraversalFrames;
 
+    // safe fallback when no behaviour traversal data was recorded.
     public static BehaviourSummary Empty => new BehaviourSummary
     {
         hesitationScore = 0f,
@@ -46,6 +48,7 @@ public struct BehaviourSummary
 
     public float EngagementScore()
     {
+        // lightweight heuristic score, not direct emotion detection.
         float hesitationPenalty = Mathf.Clamp01(hesitationScore);
         float reversalPenalty = Mathf.Clamp01(directionReversalRate / 3f);
         float momentumReward = Mathf.Clamp01(momentumFluidity);

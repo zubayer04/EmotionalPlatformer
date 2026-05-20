@@ -35,6 +35,7 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
     public GameObject BuildChunk(ChunkBlueprint blueprint, Vector3 origin)
     {
+        // converts a valid symbolic blueprint into a playable runtime chunk.
         if (blueprint == null)
         {
             Debug.LogWarning("ChunkBlueprintRuntimeBuilder: Cannot build null blueprint.");
@@ -337,6 +338,7 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
     private void CreateMergedSolidColliders(Transform parent, ChunkBlueprint blueprint)
     {
+        // merges adjacent support cells into wider ground colliders.
         if (blueprint == null)
             return;
 
@@ -391,6 +393,7 @@ public class ChunkBlueprintRuntimeBuilder : MonoBehaviour
 
     private GameObject CreateSpikeTile(Transform parent, Vector3 localPos, Vector2 size)
     {
+        // spike triggers are tuned smaller than a full cell for fairer collision.
         GameObject go = new GameObject("Spike");
         go.transform.SetParent(parent);
         go.transform.localPosition = localPos;

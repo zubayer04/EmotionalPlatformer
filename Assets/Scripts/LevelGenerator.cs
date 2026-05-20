@@ -293,6 +293,7 @@ public class LevelGenerator : MonoBehaviour
 
     public void RecordDeathForChunk(ChunkData chunk, string source, float timeOfDeathSeconds)
     {
+        // links deaths back to the active slot record for evaluation.
         if (currentRunLog == null)
             return;
 
@@ -411,6 +412,7 @@ public class LevelGenerator : MonoBehaviour
 
     private LevelRunLog.RunRecord CreateRunRecord(int runSeed)
     {
+        // captures generation settings before the run is played.
         return new LevelRunLog.RunRecord
         {
             runId = $"{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}_{Mathf.Abs(runSeed)}",
@@ -438,6 +440,7 @@ public class LevelGenerator : MonoBehaviour
 
     private List<ChunkSelectionCandidate> BuildFreshSequence()
     {
+        // plans the chunk sequence before any runtime chunks are spawned.
         List<ChunkSelectionCandidate> sequence = new List<ChunkSelectionCandidate>();
 
         if ((chunkPrefabs == null || chunkPrefabs.Length == 0) && startingChunkPrefab == null)
@@ -513,6 +516,7 @@ public class LevelGenerator : MonoBehaviour
 
     private void GenerateLevelFromSequence(List<ChunkSelectionCandidate> sequence)
     {
+        // instantiates the planned sequence and snaps each entry to the previous exit.
         if (clearBeforeGenerate) ClearLevel();
 
         if (sequence == null || sequence.Count == 0)
@@ -1071,6 +1075,7 @@ public class LevelGenerator : MonoBehaviour
 
     private void PopulateTransitionPressureRecords(LevelRunLog.RunRecord runRecord)
     {
+        // records risky local transitions after the final spawned sequence is known.
         if (runRecord == null || runRecord.slots == null)
             return;
 
@@ -1257,6 +1262,7 @@ public class LevelGenerator : MonoBehaviour
         int slotIndex,
         StructuralBudgetState structuralBudgetState)
     {
+        // switches between baseline random generation and constrained planning.
         if (generationMode == LevelGenerationMode.NaiveRandom)
             return SelectNaiveRandomCandidate(prev2, prev1, previousPrefabName, samePrimaryTagStreak);
 
@@ -1301,6 +1307,7 @@ public class LevelGenerator : MonoBehaviour
         int samePrimaryTagStreak,
         int slotIndex)
     {
+        // starts strict, then relaxes repeat rules only if no candidate survives.
         List<ChunkSelectionCandidate> candidates = GetCandidates(prev2, prev1, previousPrefabName, previousCandidateName, samePrimaryTagStreak, true, true);
 
         if (candidates.Count == 0)
@@ -1323,6 +1330,7 @@ public class LevelGenerator : MonoBehaviour
         string previousPrefabName,
         int samePrimaryTagStreak)
     {
+        // evaluation baseline: random choice after basic hard constraints.
         List<ChunkSelectionCandidate> candidates = GetCandidates(
             prev2,
             prev1,
@@ -1420,6 +1428,7 @@ public class LevelGenerator : MonoBehaviour
         int remainingSlots,
         StructuralBudgetState structuralBudgetState)
     {
+        // bounded beam lookahead checks whether immediate choices lead to good follow-ups.
         int depth = Mathf.Clamp(lookaheadDepth, 1, Mathf.Min(3, remainingSlots));
         int beamWidth = Mathf.Max(1, lookaheadBeamWidth);
 
@@ -1565,6 +1574,7 @@ public class LevelGenerator : MonoBehaviour
         int slotIndex,
         StructuralBudgetState structuralBudgetState)
     {
+        // combines difficulty fit, pressure, budget, markov, variety, and pacing.
         if (candidate == null || candidate.sourcePrefab == null)
             return 0.01f;
 
@@ -1780,6 +1790,7 @@ public class LevelGenerator : MonoBehaviour
         out float projectedStructuralLoad,
         out float allowedStructuralLoad)
     {
+        // softly reduces candidates that would overload the whole level structure.
         StructuralBudgetState projectedState = AddCandidateToStructuralBudget(currentState, candidate);
         projectedStructuralLoad = GetStructuralAdditiveLoad(projectedState);
         allowedStructuralLoad = GetAllowedStructuralAdditiveLoad(projectedState.selectedChunks);

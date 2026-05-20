@@ -5,6 +5,7 @@ public static class SimpleChunkBlueprintGenerator
 {
     public static ChunkBlueprint Generate(ChunkGenerationRequest request)
     {
+        // creates a symbolic variant from source chunk metadata.
         if (request == null)
         {
             Debug.LogWarning("SimpleChunkBlueprintGenerator: Request is null.");
@@ -186,6 +187,7 @@ public static class SimpleChunkBlueprintGenerator
 
     private static ChunkBlueprint GenerateGapLike(ChunkGenerationRequest request)
     {
+        // preserves gap family structure while varying support and landing shape.
         int width = GetPreferredWidth(request, 7);
         if (request.hasSourceContext && Mathf.Abs(request.sourceExitDelta.x) > 0.1f)
         {
@@ -273,6 +275,7 @@ public static class SimpleChunkBlueprintGenerator
         int baseRightSize,
         bool placeOnExitSide)
     {
+        // adds one controlled spike accent without changing the gap family role.
         const int safeTilesBesideOuterSpike = 3;
         int leftSize = Mathf.Max(2, baseLeftSize);
         int rightSize = Mathf.Max(2, baseRightSize);
@@ -610,6 +613,7 @@ public static class SimpleChunkBlueprintGenerator
 
     private static ChunkBlueprint GenerateElevatedPlatformPrecisionLike(ChunkGenerationRequest request)
     {
+        // creates controlled precision variants from the elevated-platform source.
         int variant = Random.Range(0, 5);
         string chunkName;
         List<string> rows;
@@ -710,6 +714,7 @@ public static class SimpleChunkBlueprintGenerator
 
     private static ChunkBlueprint AddGroundDecorations(ChunkBlueprint blueprint)
     {
+        // adds visual variety using non-colliding decorations.
         if (blueprint == null || blueprint.rows == null || blueprint.rows.Count < 2)
             return blueprint;
 

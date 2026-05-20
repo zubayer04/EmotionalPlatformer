@@ -4,6 +4,7 @@ public static class ChunkBlueprintValidator
 {
     public static ChunkBlueprintValidationResult Validate(ChunkBlueprint blueprint)
     {
+        // rejects malformed symbolic layouts before they become runtime chunks.
         ChunkBlueprintValidationResult result = new ChunkBlueprintValidationResult();
 
         if (blueprint == null)
@@ -130,6 +131,7 @@ public static class ChunkBlueprintValidator
 
     private static bool HasGroundSupportDirectlyBelow(ChunkBlueprint blueprint, int x, int y)
     {
+        // decorations are only allowed directly above ground cells.
         if (blueprint == null || blueprint.rows == null)
             return false;
 

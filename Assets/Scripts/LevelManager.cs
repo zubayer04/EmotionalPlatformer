@@ -203,6 +203,7 @@ public class LevelManager : MonoBehaviour
 
     public void OnPlayerDied(ChunkData chunk, string source)
     {
+        // records death evidence before respawning the player.
         if (!gameplayStarted) return;
         if (waitingForNextLevelChoice) return;
 
@@ -261,6 +262,7 @@ public class LevelManager : MonoBehaviour
 
     public void OnLevelCompleted()
     {
+        // closes the run: behaviour summary, adaptation, markov learning, and logging.
         if (!gameplayStarted) return;
         if (waitingForNextLevelChoice) return;
 
@@ -344,6 +346,7 @@ public class LevelManager : MonoBehaviour
 
     public void StartGameFromMenu(float startingTargetDifficulty, bool showAdvancedStats)
     {
+        // menu entry point that resets adaptive memory for a fresh session.
         gameplayStarted = true;
         advancedHud = showAdvancedStats;
         sessionLevelNumber = 0;
@@ -379,6 +382,7 @@ public class LevelManager : MonoBehaviour
 
     private void GenerateFreshLevel()
     {
+        // generates the next runtime level and restarts behaviour tracking.
         Time.timeScale = 1f;
         waitingForNextLevelChoice = false;
         currentGeneratedLevelAlreadyLogged = false;
@@ -431,6 +435,7 @@ public class LevelManager : MonoBehaviour
 
     private MarkovLearningAudit UpdateMarkovWeights(BehaviourSummary behaviour)
     {
+        // nudges learned transition weights using completed-run evidence.
         MarkovLearningAudit audit = new MarkovLearningAudit();
 
         if (levelGenerator == null) return audit;
@@ -524,6 +529,7 @@ public class LevelManager : MonoBehaviour
 
     private bool ShouldApplyPressureAwareMarkovPenalty(LevelRunLog.SlotRecord slot)
     {
+        // only penalizes pressure transitions confirmed by repeated deaths.
         if (!pressureAwareMarkovLearningEnabled || pressureAwareMarkovPenalty <= 0f)
             return false;
 
@@ -576,6 +582,7 @@ public class LevelManager : MonoBehaviour
 
     private LevelRunLog.AdaptationRecord UpdateTargetDifficulty(float deathsPerChunk, float timePerChunk, BehaviourSummary behaviour)
     {
+        // delegates difficulty decisions to the evidence-based controller.
         AdaptiveDifficultyController.Settings settings = CreateAdaptationSettings();
         AdaptiveDifficultyController.Decision decision = AdaptiveDifficultyController.Evaluate(
             new AdaptiveDifficultyController.Input
@@ -660,6 +667,7 @@ public class LevelManager : MonoBehaviour
 
     private LevelRunLog.AdaptationRecord CreateAdaptiveOffRecord(float deathsPerChunk, float timePerChunk)
     {
+        // logs evaluation evidence even when adaptation is disabled.
         float actualTargetDelta = levelGenerator.LevelDifficultyScore - lastTargetBeforeAdapt;
 
         return new LevelRunLog.AdaptationRecord
@@ -706,6 +714,7 @@ public class LevelManager : MonoBehaviour
         float timePerChunk,
         LevelRunLog.AdaptationRecord adaptationRecord)
     {
+        // writes the completed run into the jsonl evaluation log.
         LevelRunLog.RunRecord runRecord = levelGenerator != null ? levelGenerator.CurrentRunLog : null;
         if (runRecord == null)
         {

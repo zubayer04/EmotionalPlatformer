@@ -66,6 +66,7 @@ public static class AdaptiveDifficultyController
 
     public static Decision Evaluate(Input input)
     {
+        // turns completed-run evidence into the next target difficulty.
         Settings settings = input.settings;
         float targetBefore = input.targetBefore;
         float newTarget = targetBefore;
@@ -238,6 +239,7 @@ public static class AdaptiveDifficultyController
         float slowTimePerChunkThreshold,
         BehaviourSummary behaviour)
     {
+        // combines concrete performance data with lightweight behaviour proxies.
         // classic strain signals: death and time pressure
         float deathPressure = hardDeathsPerChunkThreshold > 0f
             ? deathsPerChunk / hardDeathsPerChunkThreshold
@@ -285,6 +287,7 @@ public static class AdaptiveDifficultyController
 
     private static bool HasBehaviourData(BehaviourSummary behaviour)
     {
+        // avoids using proxy metrics when no traversal evidence was recorded.
         return behaviour.chunksTraversed > 0 && behaviour.totalTraversalFrames > 0;
     }
 }

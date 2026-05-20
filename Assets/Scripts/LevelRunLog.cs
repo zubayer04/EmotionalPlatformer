@@ -202,6 +202,7 @@ public static class LevelRunLog
 
     public static bool TryAppendRun(RunRecord run, out string message)
     {
+        // appends one completed level as one json object line.
         try
         {
             string directory = GetLogDirectoryPath();

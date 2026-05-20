@@ -45,6 +45,7 @@ def resolve_log_path(cli_path: str | None) -> Path:
 
 
 def load_runs(path: Path) -> list[dict[str, Any]]:
+    # reads one completed unity run per jsonl line.
     runs: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, raw in enumerate(handle, start=1):
@@ -855,6 +856,7 @@ def print_run_summaries(runs: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    # quick terminal view for checking the latest run and aggregate evidence.
     args = parse_args()
     try:
         path = resolve_log_path(args.path)

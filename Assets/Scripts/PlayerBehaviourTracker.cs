@@ -56,6 +56,7 @@ public class PlayerBehaviourTracker : MonoBehaviour
 
     public void StartTracking()
     {
+        // resets run-level behaviour evidence at the start of a level.
         if (!TryResolveReferences(true))
         {
             return;
@@ -80,6 +81,7 @@ public class PlayerBehaviourTracker : MonoBehaviour
 
     public void ObserveCurrentChunk(ChunkData chunk)
     {
+        // updates chunk context so behaviour and deaths can be attributed.
         if (!isTracking || chunk == null) return;
 
         int nextChunkId = chunk.GetInstanceID();
@@ -96,6 +98,7 @@ public class PlayerBehaviourTracker : MonoBehaviour
 
     public void OnPlayerDied(string chunkName)
     {
+        // records death clustering and starts retry-delay timing.
         if (!isTracking) return;
 
         totalDeathsTracked++;
@@ -116,6 +119,7 @@ public class PlayerBehaviourTracker : MonoBehaviour
 
     public BehaviourSummary GetSummary()
     {
+        // converts accumulated frame data into normalized behaviour metrics.
         FlushChunkAccumulators();
 
         BehaviourSummary summary = new BehaviourSummary();
@@ -168,6 +172,7 @@ public class PlayerBehaviourTracker : MonoBehaviour
 
     private void FixedUpdate()
     {
+        // samples movement every physics tick while tracking is active.
         if (!isTracking || playerRb == null || playerController == null) return;
 
         float vx = playerRb.linearVelocity.x;
